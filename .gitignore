@@ -1,0 +1,24 @@
+# Godot
+.godot/
+godot.project
+
+# Build outputs
+bin/
+obj/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Mod build output (dll/pck files should be built locally)
+*.dll
+*.pck
+*.pdb

@@ -1,0 +1,341 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "STS2Agent API",
+    "description": "Slay the Spire 2 智能代理接口 - 获取游戏状态信息",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8888",
+      "description": "游戏内服务器"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "API 概览",
+        "description": "返回 API 端点列表",
+        "responses": {
+          "200": {
+            "description": "HTML 页面"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "健康检查",
+        "description": "检查服务状态",
+        "responses": {
+          "200": {
+            "description": "健康状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/state": {
+      "get": {
+        "summary": "完整游戏状态",
+        "description": "获取当前游戏完整状态信息",
+        "responses": {
+          "200": {
+            "description": "游戏状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/player": {
+      "get": {
+        "summary": "玩家状态",
+        "description": "获取当前玩家状态",
+        "responses": {
+          "200": {
+            "description": "玩家状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/enemies": {
+      "get": {
+        "summary": "敌人状态列表",
+        "description": "获取所有敌人状态",
+        "responses": {
+          "200": {
+            "description": "敌人列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnemyState"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/combat": {
+      "get": {
+        "summary": "战斗状态",
+        "description": "获取当前战斗状态",
+        "responses": {
+          "200": {
+            "description": "战斗状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CombatState"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "healthy"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.0.0"
+          },
+          "inGame": {
+            "type": "boolean"
+          },
+          "inCombat": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GameState": {
+        "type": "object",
+        "properties": {
+          "inGame": {
+            "type": "boolean",
+            "description": "是否在游戏中"
+          },
+          "inCombat": {
+            "type": "boolean",
+            "description": "是否在战斗中"
+          },
+          "floor": {
+            "type": "integer",
+            "description": "当前层数"
+          },
+          "turn": {
+            "type": "integer",
+            "description": "当前回合数"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "player": {
+            "$ref": "#/components/schemas/PlayerState"
+          },
+          "enemies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnemyState"
+            }
+          },
+          "combat": {
+            "$ref": "#/components/schemas/CombatState"
+          }
+        }
+      },
+      "PlayerState": {
+        "type": "object",
+        "properties": {
+          "currentHealth": {
+            "type": "integer",
+            "description": "当前生命值"
+          },
+          "maxHealth": {
+            "type": "integer",
+            "description": "最大生命值"
+          },
+          "block": {
+            "type": "integer",
+            "description": "当前护甲"
+          },
+          "energy": {
+            "type": "integer",
+            "description": "当前能量"
+          },
+          "maxEnergy": {
+            "type": "integer",
+            "description": "最大能量"
+          },
+          "stars": {
+            "type": "integer",
+            "description": "星币数量"
+          },
+          "gold": {
+            "type": "integer",
+            "description": "金币数量"
+          },
+          "potionCount": {
+            "type": "integer",
+            "description": "药水数量"
+          },
+          "orbCount": {
+            "type": "integer",
+            "description": "充能球数量"
+          },
+          "orbCapacity": {
+            "type": "integer",
+            "description": "充能球容量"
+          },
+          "orbs": {
+            "type": "array",
+            "description": "充能球列表",
+            "items": {
+              "$ref": "#/components/schemas/OrbInfo"
+            }
+          },
+          "hand": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "手牌列表"
+          },
+          "drawPile": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "抽牌堆"
+          },
+          "discardPile": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "弃牌堆"
+          },
+          "exhaustPile": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "耗尽堆"
+          },
+          "powers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "当前能力"
+          }
+        }
+      },
+      "OrbInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "充能球名称"
+          }
+        }
+      },
+      "EnemyState": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "敌人唯一标识"
+          },
+          "name": {
+            "type": "string",
+            "description": "敌人名称"
+          },
+          "currentHealth": {
+            "type": "integer",
+            "description": "当前生命值"
+          },
+          "maxHealth": {
+            "type": "integer",
+            "description": "最大生命值"
+          },
+          "block": {
+            "type": "integer",
+            "description": "当前护甲"
+          },
+          "intent": {
+            "type": "string",
+            "description": "意图类型 (Attack/Defense/Buff等)"
+          },
+          "intentAmount": {
+            "type": "integer",
+            "description": "意图数值"
+          },
+          "powers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "当前能力"
+          }
+        }
+      },
+      "CombatState": {
+        "type": "object",
+        "properties": {
+          "turn": {
+            "type": "integer",
+            "description": "战斗回合数"
+          },
+          "isPlayerTurn": {
+            "type": "boolean",
+            "description": "是否为玩家回合"
+          },
+          "canPlayCard": {
+            "type": "boolean",
+            "description": "是否可以出牌"
+          },
+          "canEndTurn": {
+            "type": "boolean",
+            "description": "是否可以结束回合"
+          }
+        }
+      }
+    }
+  }
+}
