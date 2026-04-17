@@ -1,9 +1,13 @@
 # STS2Agent Deploy Script
-# Package MOD as ZIP for SlaySP2Manager
+# Direct deployment to Slay the Spire 2 mods folder (no ZIP packaging)
+#
+# Usage:
+#   .\deploy.ps1                       # Deploy to default game path
+#   .\deploy.ps1 -GamePath "D:\..."    # Specify custom game path
+#   .\deploy.ps1 -SkipBuild            # Skip build, only deploy
 
 param(
-    [string]$SlaySP2Path = "$env:APPDATA\SlaySP2Manager",
-    [string]$GameName = "Slay the Spire 2",
+    [string]$GamePath = "D:\steam\steamapps\common\Slay the Spire 2",
     [switch]$SkipBuild
 )
 
@@ -19,14 +23,12 @@ $SourcePdb = "$ProjectRoot\.godot\mono\temp\bin\Release\$ModName.pdb"
 $SourceManifest = "$ProjectRoot\$ModName.json"
 $SourcePck = "$ProjectRoot\libs\template.pck"
 
-# Package output
-$TempDir = "$env:TEMP\STS2Agent_Package"
-$ZipOutput = "$ProjectRoot\publish\$ModName.zip"
-$TargetDir = "$SlaySP2Path\mods"
+# Target directory (game mods folder)
+$TargetModDir = "$GamePath\mods\$ModName"
 
 Write-Host "=== STS2Agent Deploy Script ===" -ForegroundColor Cyan
-Write-Host "SlaySP2Manager: $SlaySP2Path"
-Write-Host "Game: $GameName"
+Write-Host "Game Path: $GamePath"
+Write-Host "Target: $TargetModDir"
 Write-Host ""
 
 # Build project
@@ -51,80 +53,47 @@ if (-not (Test-Path $SourceDll)) {
     exit 1
 }
 
-if (-not (Test-Path $SourcePck)) {
-    Write-Host "[WARN] template.pck not found: $SourcePck" -ForegroundColor Yellow
-    Write-Host "  [TIP] Copy a .pck file from another MOD to libs\template.pck, or create an empty one" -ForegroundColor Cyan
-    # 不退出，而是跳过PCK打包
+# Create target mods directory (clean if exists)
+if (Test-Path $TargetModDir) {
+    Write-Host "[Clean] Removing existing mod folder..." -ForegroundColor Yellow
+    Remove-Item $TargetModDir -Recurse -Force
 }
+New-Item -ItemType Directory -Path $TargetModDir -Force | Out-Null
+Write-Host "[Deploy] Copying files to $TargetModDir..." -ForegroundColor Yellow
 
-# Check SlaySP2Manager directory
-if (-not (Test-Path $SlaySP2Path)) {
-    Write-Host "[WARN] SlaySP2Manager directory not found, will create" -ForegroundColor Yellow
-}
-
-# Create temp package directory
-if (Test-Path $TempDir) {
-    Remove-Item $TempDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
-
-# Copy files to temp directory
-Write-Host "[Package] Copying files..."
-Copy-Item $SourceDll -Destination $TempDir -Force
+# Copy files directly to target directory
+Copy-Item $SourceDll -Destination $TargetModDir -Force
 Write-Host "  [+] STS2Agent.dll" -ForegroundColor DarkGray
 
 if (Test-Path $SourcePdb) {
-    Copy-Item $SourcePdb -Destination $TempDir -Force
+    Copy-Item $SourcePdb -Destination $TargetModDir -Force
     Write-Host "  [+] STS2Agent.pdb" -ForegroundColor DarkGray
 } else {
     Write-Host "  [~] STS2Agent.pdb (not found, skip)" -ForegroundColor DarkGray
 }
 
 if (Test-Path $SourceManifest) {
-    Copy-Item $SourceManifest -Destination $TempDir -Force
+    Copy-Item $SourceManifest -Destination $TargetModDir -Force
     Write-Host "  [+] STS2Agent.json" -ForegroundColor DarkGray
 } else {
     Write-Host "  [!] STS2Agent.json (not found, skip)" -ForegroundColor Yellow
 }
 
+# Optionally copy PCK file if available
 if (Test-Path $SourcePck) {
-    Copy-Item $SourcePck -Destination "$TempDir\$ModName.pck" -Force
+    Copy-Item $SourcePck -Destination "$TargetModDir\STS2Agent.pck" -Force
     Write-Host "  [+] STS2Agent.pck" -ForegroundColor DarkGray
 } else {
-    Write-Host "  [~] template.pck (not found, skipping PCK packaging)" -ForegroundColor DarkGray
+    Write-Host "  [~] template.pck not found, skipping PCK file" -ForegroundColor DarkGray
 }
-
-# Create output directory
-$PublishDir = Split-Path -Parent $ZipOutput
-if (-not (Test-Path $PublishDir)) {
-    New-Item -ItemType Directory -Path $PublishDir -Force | Out-Null
-}
-
-# Create ZIP package
-Write-Host "[Package] Creating ZIP..." -ForegroundColor Yellow
-if (Test-Path $ZipOutput) {
-    Remove-Item $ZipOutput -Force
-}
-Compress-Archive -Path "$TempDir\*" -DestinationPath $ZipOutput -CompressionLevel Optimal
-
-# Copy to SlaySP2Manager mods directory
-$TargetZip = "$TargetDir\$ModName.zip"
-if (-not (Test-Path $TargetDir)) {
-    New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
-}
-Copy-Item $ZipOutput -Destination $TargetZip -Force
-
-# Cleanup temp directory
-Remove-Item $TempDir -Recurse -Force
 
 # Stats
-$ZipSize = (Get-Item $ZipOutput).Length / 1KB
+$DllSize = (Get-Item $SourceDll).Length / 1KB
 
 Write-Host ""
 Write-Host "=== Deploy Complete ===" -ForegroundColor Cyan
-Write-Host "ZIP: $ZipOutput" -ForegroundColor Green
-Write-Host "Size: $([math]::Round($ZipSize, 1)) KB"
-Write-Host "Copied to: $TargetZip" -ForegroundColor Green
+Write-Host "Files deployed to: $TargetModDir" -ForegroundColor Green
+Write-Host "DLL Size: $([math]::Round($DllSize, 1)) KB"
 Write-Host ""
-Write-Host "Enable MOD in SlaySP2Manager, then start game" -ForegroundColor Yellow
-Write-Host "API: http://localhost:8080" -ForegroundColor Yellow
+Write-Host "Restart game to load the updated MOD" -ForegroundColor Yellow
+Write-Host "API: http://localhost:8888" -ForegroundColor Yellow

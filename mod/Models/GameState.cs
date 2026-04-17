@@ -10,5 +10,6 @@ public class GameState
     public PlayerState? Player { get; set; }
     public List<EnemyState> Enemies { get; set; } = new();
     public CombatState? Combat { get; set; }
+    public CardRewardInfo? CardReward { get; set; }
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }

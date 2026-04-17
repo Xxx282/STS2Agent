@@ -10,6 +10,7 @@ public class PlayerState
     public int Stars { get; set; }
     public int Gold { get; set; }
     public int PotionCount { get; set; }
+    public List<string> Potions { get; set; } = new();
 
     public int OrbCount { get; set; }
     public int OrbCapacity { get; set; }

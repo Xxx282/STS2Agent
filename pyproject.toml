@@ -1,0 +1,12 @@
+[project]
+name = "sts2agent"
+version = "0.1.0"
+description = "STS2Agent SSE Client"
+requires-python = ">=3.10"
+dependencies = [
+    "sseclient-py>=0.0.27",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "playwright>=1.40.0",
+]

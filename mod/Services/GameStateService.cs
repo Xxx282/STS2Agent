@@ -18,11 +18,19 @@ public class GameStateService
     private readonly object _logLock = new();
 
     private FieldInfo? _runManagerStateField;
+    private PropertyInfo? _runManagerStateProp;
     private PropertyInfo? _runManagerIsInProgressProp;
     private PropertyInfo? _combatManagerIsInProgressProp;
     private bool _reflectionInitialized;
 
     public event Action<GameState>? OnStateChanged;
+
+    private static string GetLogDir()
+    {
+        string executablePath = OS.GetExecutablePath();
+        string directoryName = Path.GetDirectoryName(executablePath) ?? "";
+        return Path.Combine(directoryName, "mods", "STS2Agent", "logs");
+    }
 
     private void Log(string message)
     {
@@ -30,6 +38,15 @@ public class GameStateService
         {
             try
             {
+                string logDir = GetLogDir();
+                if (!Directory.Exists(logDir))
+                {
+                    Directory.CreateDirectory(logDir);
+                }
+                if (!File.Exists(_logFilePath))
+                {
+                    using (File.Create(_logFilePath)) { }
+                }
                 var logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [GameStateService] {message}";
                 File.AppendAllText(_logFilePath, logEntry + System.Environment.NewLine);
             }
@@ -43,6 +60,11 @@ public class GameStateService
         Log($"[ERROR] {fullMsg}");
     }
 
+    private void LogWarning(string message)
+    {
+        Log($"[WARN] {message}");
+    }
+
     public GameState GetCurrentState()
     {
         lock (_lock)
@@ -53,9 +75,13 @@ public class GameStateService
 
     public GameStateService()
     {
-        var debugDir = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "STS2Agent");
-        System.IO.Directory.CreateDirectory(debugDir);
-        _logFilePath = System.IO.Path.Combine(debugDir, "debug.log");
+        string logDir = GetLogDir();
+        Directory.CreateDirectory(logDir);
+        _logFilePath = Path.Combine(logDir, "debug.log");
+        if (!File.Exists(_logFilePath))
+        {
+            using (File.Create(_logFilePath)) { }
+        }
 
         Log("=== GameStateService init ===");
         try
@@ -78,8 +104,13 @@ public class GameStateService
         if (runManagerType != null)
         {
             _runManagerIsInProgressProp = runManagerType.GetProperty("IsInProgress", BindingFlags.Public | BindingFlags.Static);
-            _runManagerStateField = runManagerType.GetField("State", BindingFlags.NonPublic | BindingFlags.Instance);
-            Log($"Init: RunManager.IsInProgress={_runManagerIsInProgressProp != null}, State={_runManagerStateField != null}");
+
+            // 查找State成员（字段或属性）
+            _runManagerStateField = runManagerType.GetField("State", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+            if (_runManagerStateField == null)
+                _runManagerStateProp = runManagerType.GetProperty("State", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+
+            Log($"Init: RunManager.IsInProgress={_runManagerIsInProgressProp != null}, State={_runManagerStateField != null || _runManagerStateProp != null}");
         }
 
         var combatManagerType = GetCachedType("MegaCrit.Sts2.Core.Combat.CombatManager");
@@ -202,7 +233,7 @@ public class GameStateService
     private object? GetProperty(object? obj, string name)
     {
         if (obj == null) return null;
-        return obj.GetType().GetProperty(name)?.GetValue(obj);
+        return obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(obj);
     }
 
     private T? GetProperty<T>(object? obj, string name)
@@ -211,10 +242,26 @@ public class GameStateService
         return v is T t ? t : default;
     }
 
-    private object? GetField(object? obj, string name)
+    private object? GetFieldValue(FieldInfo? field, object? instance)
     {
-        if (obj == null) return null;
-        return obj.GetType().GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(obj);
+        if (field == null) return null;
+        // 静态字段传入null，实例字段传入实例
+        return field.IsStatic ? field.GetValue(null) : field.GetValue(instance);
+    }
+
+    private object? GetRunState(object? runManager)
+    {
+        if (runManager == null) return null;
+
+        // 优先使用缓存的字段（静态或实例）
+        if (_runManagerStateField != null)
+            return _runManagerStateField.IsStatic ? _runManagerStateField.GetValue(null) : _runManagerStateField.GetValue(runManager);
+
+        // 使用缓存的属性
+        if (_runManagerStateProp != null)
+            return _runManagerStateProp.GetValue(runManager);
+
+        return null;
     }
 
     private object? CallMethod(object? obj, string name)
@@ -263,7 +310,7 @@ public class GameStateService
         {
             var rm = GetSingleton("MegaCrit.Sts2.Core.Runs.RunManager");
             if (rm == null) return 0;
-            var rs = GetField(rm, "State");
+            var rs = GetRunState(rm);
             if (rs == null) return 0;
             // ActFloor: ?? act ????????????? row+1?
             // TotalFloor: ????????
@@ -342,22 +389,23 @@ public class GameStateService
                     foreach (var creature in (System.Collections.IEnumerable)playerCreatures)
                     {
                         if (creature == null) continue;
+
                         // Creature.CurrentHp / MaxHp / Block
                         player.CurrentHealth = GetProperty<int?>(creature, "CurrentHp") ?? 0;
                         player.MaxHealth = GetProperty<int?>(creature, "MaxHp") ?? 0;
                         player.Block = GetProperty<int?>(creature, "Block") ?? 0;
-
-                        // Creature.Powers
                         player.Powers = GetCreaturePowers(creature);
 
                         // PlayerCombatState -> Energy / Hand / DrawPile / DiscardPile / ExhaustPile / Stars / Orbs
                         playerRef = GetProperty<object>(creature, "Player");
                         pcs = GetProperty<object>(playerRef, "PlayerCombatState");
+
                         if (pcs != null)
                         {
                             player.Energy = GetProperty<int?>(pcs, "Energy") ?? 0;
                             player.MaxEnergy = GetProperty<int?>(pcs, "MaxEnergy") ?? 3;
                             player.Stars = GetProperty<int?>(pcs, "Stars") ?? 0;
+
                             player.Hand = GetCardNamesFromPile(pcs, "Hand");
                             player.DrawPile = GetCardNamesFromPile(pcs, "DrawPile");
                             player.DiscardPile = GetCardNamesFromPile(pcs, "DiscardPile");
@@ -367,42 +415,58 @@ public class GameStateService
                             var orbQueue = GetProperty<object>(pcs, "OrbQueue");
                             if (orbQueue != null)
                             {
-                                player.OrbCount = GetProperty<int?>(orbQueue, "Count") ?? 0;
+                                var orbsList = GetProperty<object>(orbQueue, "Orbs");
+                                if (orbsList != null)
+                                {
+                                    int count = 0;
+                                    foreach (var _ in (System.Collections.IEnumerable)orbsList) count++;
+                                    player.OrbCount = count;
+                                }
                                 player.OrbCapacity = GetProperty<int?>(orbQueue, "Capacity") ?? 0;
                                 player.Orbs = GetOrbInfos(orbQueue);
                             }
                         }
-                        break;
+                        break; // 只处理第一个生物（玩家）
                     }
                 }
             }
 
             // 从 RunState.Players[0] 获取 Gold / PotionCount (非战斗时也获取)
             var rm = GetSingleton("MegaCrit.Sts2.Core.Runs.RunManager");
-            var rs = GetField(rm, "State");
-            var players = GetProperty<object>(rs, "Players");
-            if (players != null)
+            if (rm != null)
             {
-                foreach (var p in (System.Collections.IEnumerable)players)
+                var rs = GetRunState(rm);
+                if (rs != null)
                 {
-                    if (p == null) continue;
-                    // 如果 combatState 为空或 pcs 为 null，从这里获取生命值
-                    if (combatState == null || pcs == null)
+                    var players = GetProperty<object>(rs, "Players");
+                    if (players != null)
                     {
-                        var creature = GetProperty<object>(p, "Creature");
-                        if (creature != null)
+                        foreach (var p in (System.Collections.IEnumerable)players)
                         {
-                            player.CurrentHealth = GetProperty<int?>(creature, "CurrentHp") ?? 0;
-                            player.MaxHealth = GetProperty<int?>(creature, "MaxHp") ?? 0;
-                            player.Block = GetProperty<int?>(creature, "Block") ?? 0;
+                            if (p == null) continue;
+                            // 如果 combatState 为空或 pcs 为 null，从这里获取生命值
+                            if (combatState == null || pcs == null)
+                            {
+                                var creature = GetProperty<object>(p, "Creature");
+                                if (creature != null)
+                                {
+                                    player.CurrentHealth = GetProperty<int?>(creature, "CurrentHp") ?? 0;
+                                    player.MaxHealth = GetProperty<int?>(creature, "MaxHp") ?? 0;
+                                    player.Block = GetProperty<int?>(creature, "Block") ?? 0;
+                                }
+                            }
+                            // Gold / PotionCount / Potions
+                            player.Gold = GetProperty<int?>(p, "Gold") ?? 0;
+                            player.PotionCount = GetProperty<int?>(p, "MaxPotionCount") ?? 0;
+                            // 获取药水列表
+                            player.Potions = GetPotionNames(p);
+                            break;
                         }
                     }
-                    // Gold / PotionCount
-                    player.Gold = GetProperty<int?>(p, "Gold") ?? 0;
-                    player.PotionCount = GetProperty<int?>(p, "MaxPotionCount") ?? 0;
-                    break;
                 }
             }
+
+            // 已经在线443记录了汇总日志
         }
         catch (Exception ex)
         {
@@ -413,38 +477,63 @@ public class GameStateService
 
     private List<OrbInfo> GetOrbInfos(object? orbQueue)
     {
-        var orbs = new List<OrbInfo>();
-        if (orbQueue == null) return orbs;
-        var orbsObj = GetProperty<object>(orbQueue, "Orbs");
-        if (orbsObj == null) return orbs;
+        var result = new List<OrbInfo>();
+        if (orbQueue == null) return result;
 
-        foreach (var orb in (System.Collections.IEnumerable)orbsObj)
+        try
         {
-            if (orb == null) continue;
-            var name = GetProperty<string?>(orb, "Name");
-            if (!string.IsNullOrEmpty(name))
+            var orbsObj = GetProperty<object>(orbQueue, "Orbs");
+            if (orbsObj is System.Collections.IEnumerable enumerable)
             {
-                orbs.Add(new OrbInfo { Name = name });
+                foreach (var orb in enumerable)
+                {
+                    if (orb == null) continue;
+                    var name = GetProperty<string?>(orb, "Name");
+                    if (!string.IsNullOrEmpty(name))
+                        result.Add(new OrbInfo { Name = name });
+                }
             }
         }
-        return orbs;
+        catch (Exception ex)
+        {
+            LogError("[GetOrbInfos] failed", ex);
+        }
+
+        return result;
     }
 
     private List<string> GetCardNamesFromPile(object? playerCombatState, string pileName)
     {
-        if (playerCombatState == null) return new List<string>();
-        var pile = GetProperty<object>(playerCombatState, pileName);
-        if (pile == null) return new List<string>();
-
-        // CardPile.Cards 本身就是 IReadOnlyList<CardModel>，直接迭代
-        var cards = new List<string>();
-        foreach (var card in (System.Collections.IEnumerable)pile)
+        var result = new List<string>();
+        try
         {
-            if (card == null) continue;
-            var name = GetProperty<string?>(card, "Name");
-            if (!string.IsNullOrEmpty(name)) cards.Add(name);
+            var pile = GetProperty<object>(playerCombatState, pileName);
+            if (pile == null) return result;
+
+            // CardPile 通常有一个 Cards 属性
+            var cardsObj = GetProperty<object>(pile, "Cards");
+            if (cardsObj is System.Collections.IEnumerable enumerable && !(cardsObj is string))
+            {
+                foreach (var card in enumerable)
+                {
+                    if (card == null) continue;
+
+                    // 获取卡片标题（中文名称）
+                    var name = GetProperty<string?>(card, "Title");
+                    if (string.IsNullOrEmpty(name))
+                        name = GetProperty<string?>(card, "CardId") ?? GetProperty<string?>(card, "Id") ?? card.GetType().Name;
+
+                    if (!string.IsNullOrEmpty(name))
+                        result.Add(name);
+                }
+            }
         }
-        return cards;
+        catch (Exception ex)
+        {
+            LogError($"[GetCardNamesFromPile] {pileName} failed", ex);
+        }
+
+        return result;
     }
 
     private List<string> GetCreaturePowers(object? creature)
@@ -460,6 +549,40 @@ public class GameStateService
             if (!string.IsNullOrEmpty(name)) powers.Add(name);
         }
         return powers;
+    }
+
+    private List<string> GetPotionNames(object? player)
+    {
+        var potions = new List<string>();
+        if (player == null) return potions;
+
+        try
+        {
+            // Player可能有Potions属性
+            var potionsObj = GetProperty<object>(player, "Potions");
+            if (potionsObj is System.Collections.IEnumerable enumerable && !(potionsObj is string))
+            {
+                foreach (var potion in enumerable)
+                {
+                    if (potion == null) continue;
+
+                    // 获取药水名称，尝试多个属性名
+                    var name = GetProperty<string?>(potion, "Name")
+                              ?? GetProperty<string?>(potion, "PotionName")
+                              ?? GetProperty<string?>(potion, "DisplayName")
+                              ?? potion.GetType().Name;
+
+                    if (!string.IsNullOrEmpty(name))
+                        potions.Add(name);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError("[GetPotionNames] failed", ex);
+        }
+
+        return potions;
     }
 
     private List<EnemyState> GetEnemyStates(object? combatState)
@@ -558,6 +681,7 @@ public class GameStateService
                 Stars = s.Player.Stars,
                 Gold = s.Player.Gold,
                 PotionCount = s.Player.PotionCount,
+                Potions = new List<string>(s.Player.Potions),
                 OrbCount = s.Player.OrbCount,
                 OrbCapacity = s.Player.OrbCapacity,
                 Orbs = s.Player.Orbs.Select(o => new OrbInfo { Name = o.Name }).ToList(),
