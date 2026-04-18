@@ -353,6 +353,10 @@
       "CardRewardInfo": {
         "type": "object",
         "properties": {
+          "hasReward": {
+            "type": "boolean",
+            "description": "是否有卡牌奖励"
+          },
           "isVisible": {
             "type": "boolean",
             "description": "卡牌奖励界面是否显示"
@@ -365,14 +369,6 @@
             "type": "boolean",
             "description": "是否可以跳过"
           },
-          "cardCount": {
-            "type": "integer",
-            "description": "可选卡牌数量"
-          },
-          "rewardSource": {
-            "type": "string",
-            "description": "奖励来源 (Combat/Event/Shop等)"
-          },
           "cards": {
             "type": "array",
             "items": {
@@ -384,29 +380,50 @@
       "RewardCardInfo": {
         "type": "object",
         "properties": {
-          "cardId": {
-            "type": "string",
-            "description": "卡牌唯一标识ID（如 Heavy、Melancholy 等具体卡牌类名）"
-          },
           "name": {
             "type": "string",
-            "description": "卡牌显示名称（从 Title.Key 提取，已本地化）"
+            "description": "卡牌显示名称（中文本地化）"
           },
           "cost": {
             "type": "integer",
-            "description": "能量费用（从 Cost.Canonical 提取）"
+            "description": "能量费用"
           },
           "rarity": {
             "type": "string",
-            "description": "稀有度：Starter / Basic / Common / Uncommon / Rare"
+            "description": "稀有度：Common / Uncommon / Rare"
           },
           "type": {
             "type": "string",
-            "description": "卡牌类型：Attack / Skill / Power / Curse / Status"
+            "description": "卡牌类型：Attack / Skill / Power"
           },
           "isUpgraded": {
             "type": "boolean",
             "description": "是否已升级"
+          },
+          "pickRate": {
+            "type": "number",
+            "nullable": true,
+            "description": "场外选牌率（%）"
+          },
+          "winRateDelta": {
+            "type": "number",
+            "nullable": true,
+            "description": "场外胜率差值（%）"
+          },
+          "skadaScore": {
+            "type": "number",
+            "nullable": true,
+            "description": "场外评分（综合评分）"
+          },
+          "rank": {
+            "type": "integer",
+            "nullable": true,
+            "description": "场外排名"
+          },
+          "confidence": {
+            "type": "string",
+            "nullable": true,
+            "description": "数据可信度：low / medium / high"
           }
         }
       }

@@ -2,6 +2,14 @@
  * @Author: Mendax
  * @Date: 2026-04-13 22:35:28
  * @LastEditors: Mendax
+ * @LastEditTime: 2026-04-18 23:35:59
+ * @Description: 
+ * @FilePath: \STS2Agent\README.md
+-->
+<!--
+ * @Author: Mendax
+ * @Date: 2026-04-13 22:35:28
+ * @LastEditors: Mendax
  * @LastEditTime: 2026-04-16 22:49:42
  * @Description: 
  * @FilePath: \STS2Agent\README.md
@@ -45,20 +53,19 @@ STS2Agent/
 
 ## MOD安装
 
-1. 确保已安装 SlaySP2Manager
-2. 进入mod目录
+1. 进入mod目录
 
     ```bash
     cd mod
     ```
 
-3. 编译项目
+2. 编译项目
 
    ```bash
    dotnet build -c Release
    ```
 
-4. 运行部署脚本
+3. 运行部署脚本
 
    ```bash
    .\deploy.ps1
@@ -76,13 +83,15 @@ uv run python <*.py>
 # 添加新依赖
 uv add <package>
 
+# 环境变量
+cp .env.example .env
 ```
 
 ---
 
-## API
+## [API 文档](./mod/openapi.json) 
 
-运行后访问 <http://localhost:8888>
+运行端口 <http://localhost:8888>
 
 | 端点 | 方法 | 描述 |
 | ---- | ---- | ---- |
@@ -95,7 +104,8 @@ uv add <package>
 
 ## 待办事项
 
-- [ ] 卡牌选择数据获取的测试
+- [x] 卡牌选择数据获取的测试(2026.4.18完成)
+- [x] 卡牌场外数据获取脚本测试
 
 ## 感谢
 

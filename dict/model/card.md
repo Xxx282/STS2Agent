@@ -82,8 +82,8 @@ var title = GetProperty(card, "Title");
 var titleKey = title.GetType().GetProperty("Key",
     BindingFlags.Public | BindingFlags.Instance)?.GetValue(title) as string;
 
-// 获取能量费用
-var costObj = GetProperty(card, "Cost");
+// 获取能量费用（属性名是 EnergyCost，不是 Cost）
+var costObj = GetProperty(card, "EnergyCost");
 var cost = costObj.GetType().GetProperty("Canonical",
     BindingFlags.Public | BindingFlags.Instance)?.GetValue(costObj) as int? ?? 0;
 

@@ -22,6 +22,7 @@ public static class STS2Agent
     private static readonly ConcurrentQueue<RequestContext> _mainThreadQueue = new();
     private static GameStateService? _gameStateService;
     private static CardRewardService? _cardRewardService;
+    private static CardStatsService? _cardStatsService;
     private static bool _initialized;
     private static int _updateTickCounter;
 
@@ -51,6 +52,10 @@ public static class STS2Agent
             var gameAssembly = typeof(MegaCrit.Sts2.Core.Nodes.NGame).Assembly;
             _cardRewardService = new CardRewardService(gameAssembly);
             Logger.Info("Initialize: CardRewardService 创建成功");
+
+            Logger.Info("Initialize: 正在创建 CardStatsService...");
+            _cardStatsService = new CardStatsService();
+            Logger.Info($"Initialize: CardStatsService 创建成功, IsLoaded={_cardStatsService.IsLoaded}");
 
             _initialized = true;
 
@@ -363,20 +368,29 @@ public static class STS2Agent
             var reward = _cardRewardService?.GetCurrentReward();
             if (reward != null && reward.IsVisible)
             {
+                var character = DetectCurrentCharacter();
                 var response = new
                 {
                     hasReward = true,
                     isVisible = reward.IsVisible,
                     canReroll = reward.CanReroll,
                     canSkip = reward.CanSkip,
-                    cards = reward.Cards.Select(c => new
+                    cards = reward.Cards.Select(c =>
                     {
-                        cardId = c.CardId,
-                        name = c.Name,
-                        cost = c.Cost,
-                        rarity = c.Rarity,
-                        type = c.Type,
-                        isUpgraded = c.IsUpgraded
+                        var s = _cardStatsService?.GetStats(character, c.CardId);
+                        return new
+                        {
+                            name = c.Name,
+                            cost = c.Cost,
+                            rarity = c.Rarity,
+                            type = c.Type,
+                            isUpgraded = c.IsUpgraded,
+                            pickRate = s?.PickRate,
+                            winRateDelta = s?.WinRateDelta,
+                            skadaScore = s?.SkadaScore,
+                            rank = s?.Rank,
+                            confidence = s?.Confidence,
+                        };
                     }).ToList()
                 };
                 Logger.Info($"[API] /api/CardReward 返回: Cards={reward.Cards.Count}");
@@ -391,6 +405,54 @@ public static class STS2Agent
         {
             Logger.Error("[API] /api/CardReward 处理失败", ex);
             SendError(context, 500, ex.Message);
+        }
+    }
+
+    private static string DetectCurrentCharacter()
+    {
+        try
+        {
+            var state = _gameStateService?.GetCurrentState();
+            var player = state?.Player;
+            if (player == null) return "IRONCLAD";
+
+            // 通过手中卡牌 ID 推断角色
+            // IRONCLAD: Strike_IR, Defend_IR, Bash_IR 等后缀
+            // SILENT: Strike_Watcher, Defend_Watcher, Slash_Watcher 等
+            // DEFECT: Strike_Defect, Defend_Defect, Zap_Defect 等
+            var hand = player.Hand;
+            if (hand.Count > 0)
+            {
+                foreach (var card in hand)
+                {
+                    if (card.Contains("Watcher")) return "WATCHER";
+                    if (card.Contains("Defect")) return "DEFECT";
+                    if (card.Contains("Ironclad")) return "IRONCLAD";
+                    if (card.Contains("Silent")) return "SILENT";
+                    if (card.Contains("_IR")) return "IRONCLAD";
+                    if (card.Contains("_SW")) return "SILENT";
+                    if (card.Contains("_DF")) return "DEFECT";
+                    if (card.Contains("_AW")) return "AWAKENEDONE";
+                }
+            }
+
+            // 通过弃牌堆/抽牌堆推断
+            var drawPile = player.DrawPile;
+            foreach (var card in drawPile)
+            {
+                if (card.Contains("Watcher")) return "WATCHER";
+                if (card.Contains("Defect")) return "DEFECT";
+                if (card.Contains("_DF")) return "DEFECT";
+                if (card.Contains("_AW")) return "AWAKENEDONE";
+            }
+
+            // 备用：通过玩家拥有金币数量推断（仅供参考）
+            // 新手角色通常是默认角色
+            return "IRONCLAD";
+        }
+        catch
+        {
+            return "IRONCLAD";
         }
     }
 }

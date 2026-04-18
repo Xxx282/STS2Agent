@@ -1,138 +1,59 @@
 # 卡牌场外数据缓存方案
 
-**目标**：将 sts2log.com 的卡牌社区统计数据（pick_rate、win_rate_delta、skada_score 等）接入 C# mod，使 AI 在卡牌奖励界面能参考社区胜率数据做决策。
-
-**离线可用**：游戏内断网时用本地缓存兜底，不强制要求网络。
+**目标**：将 sts2log.com 的卡牌社区统计数据（pick_rate、win_rate_delta、skada_score）接入 C# mod，使 AI 在卡牌奖励界面能参考社区胜率做决策。离线可用。
 
 ---
 
-## 架构总览
+## 架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  STS2Data 项目（独立维护）                                │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────┐ │
-│  │ Python 爬虫  │───▶│ 数据处理过滤  │───▶│ 上传到    │ │
-│  │ sts2log.com │    │              │    │ OSS / CDN │ │
-│  └──────────────┘    └──────────────┘    └───────────┘ │
-└─────────────────────────────────────────────────────────┘
-                                                      │
-                                                      ▼ 远程 JSON URL
-┌─────────────────────────────────────────────────────────┐
-│  STS2Agent 项目（C# Mod）                               │
-│                                                         │
-│  CardStatsService.Initialize()                          │
-│    ├─ 本地缓存有效（< 24h）──▶ 直接加载到内存            │
-│    ├─ 本地缓存过期 ──▶ 联网拉取远程 JSON ──▶ 写入本地     │
-│    └─ 联网失败 ──▶ fallback 到过期本地缓存               │
-│                                                         │
-│  /api/CardReward                                        │
-│    └─ 附加场外统计数据字段 ──▶ AI Client                  │
-└─────────────────────────────────────────────────────────┘
+Python 端                          C# 端
+────────                          ─────
+sts2log.com ──抓取──▶ OSS          游戏启动
+                        │          │
+                        ▼          ▼
+              STS2/{char}/card_stats.json   CardStatsService
+                        │          │   ├─ 缓存有效（<24h）──直接加载
+                        │          │   ├─ 缓存过期──联网拉取──合并──写入缓存
+                        │          │   └─ 联网失败──fallback到过期缓存
+                        │          │
+              data_url.txt ◀──────┘   (C# 不写 URL，Python 写入)
 ```
 
-**核心原则**：
-- STS2Data 和 STS2Agent 是**两个独立项目**，分开部署和维护
-- 数据更新只依赖 STS2Data，STS2Agent 只消费
-- 离线必须可用：本地缓存永久兜底
+**原则**：
+- Python 负责数据生产和上传
+- C# 只负责消费（拉取 + 查询）
+- 本地缓存永久兜底
 
 ---
 
-## 第一步：新建独立数据项目 STS2Data
-
-### 项目结构
+## OSS 结构
 
 ```
-STS2Data/
-├── pyproject.toml
-├── src/
-│   ├── __init__.py
-│   ├── scraper.py      # 爬虫核心（从 test/test_cards_scraper.py 迁移）
-│   ├── uploader.py     # OSS/CDN 上传逻辑
-│   └── cli.py          # CLI 入口
-├── .github/
-│   └── workflows/
-│       └── daily-scrape.yml  # GitHub Actions 定时任务（可选）
-└── README.md
+STS2/ironclad/card_stats.json
+STS2/silent/card_stats.json
+STS2/defect/card_stats.json
+STS2/necrobinder/card_stats.json
+STS2/regent/card_stats.json
 ```
 
-### `src/scraper.py`（迁移 + 重构）
-
-将 `test/test_cards_scraper.py` 中的 `STS2CardScraper` 迁移至此，保留核心逻辑：
-
-- HMAC-SHA256 签名请求（`x-skada-t` / `x-skada-s` header）
-- 分页抓取（IRONCLAD / SILENT / DEFECT / AWAKENEDONE）
-- `fetch_api(char, page)` / `scrape(char)` 方法
-- `ScraperResult` dataclass 返回类型
-
-### `src/uploader.py`
-
-使用阿里云 OSS，通过环境变量配置：
-
+**角色映射**：
 ```python
-# 环境变量
-OSS_ENDPOINT=xxx        # OSS endpoint，如 https://oss-cn-hangzhou.aliyuncs.com
-OSS_BUCKET=xxx          # Bucket 名称
-OSS_KEY=xxx             # AccessKey ID
-OSS_SECRET=xxx          # AccessKey Secret
-OSS_OBJECT_KEY=xxx      # 上传后的对象路径，如 cards_stats.json
+CHAR_TO_FOLDER = {
+    "IRONCLAD": "ironclad",
+    "SILENT": "silent",
+    "DEFECT": "defect",
+    "NECROBINDER": "necrobinder",
+    "REGENT": "regent",
+}
 ```
 
-上传后返回**公开访问 URL**，并将该 URL 写入配置文件供 C# 端读取：
-
-```python
-# 配置文件路径（由 --config 参数指定，默认 ./config.txt）
-https://<bucket>.<endpoint>/<object_key>
-```
-
-上传流程：
-
-1. 读取环境变量，初始化 `oss2.Bucket`
-2. 调用 `bucket.put_object_from_file(object_key, local_file)`
-3. 拼接公开 URL
-4. 可选写入配置文件：`open(config_path, "w").write(url)`
-
-### `src/cli.py`
-
-```bash
-python -m src.cli                      # 抓取 + 上传（完整流程）
-python -m src.cli --scrape-only        # 仅抓取，不上传
-python -m src.cli --upload-only        # 仅上传本地数据文件
-python -m src.cli --url                # 输出当前数据 URL
-```
-
-返回码：0=成功，1=网络错误，2=无需刷新，3=参数错误。
-
-### 定时任务（可选）
-
-通过 GitHub Actions 每日自动触发，触发后执行 `python -m src.cli` 将数据上传到 OSS：
-
-```yaml
-# .github/workflows/daily-scrape.yml
-on:
-  schedule:
-    - cron: '0 4 * * *'   # 每天 UTC 4:00（约北京时间 12:00）
-  workflow_dispatch:        # 支持手动触发
-
-env:
-  OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
-  OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-  OSS_KEY: ${{ secrets.OSS_KEY }}
-  OSS_SECRET: ${{ secrets.OSS_SECRET }}
-  OSS_OBJECT_KEY: card_stats.json
-```
-
----
-
-## 第二步：设计 JSON 缓存结构
-
-### 远程 JSON（STS2Data 上传）
-
+**单角色 JSON 格式**：
 ```json
 {
   "version": 1,
   "updated_at": "2026-04-17T12:00:00+08:00",
-  "characters": ["IRONCLAD", "SILENT", "DEFECT", "AWAKENEDONE"],
+  "characters": ["IRONCLAD"],
   "data": {
     "IRONCLAD": [
       {
@@ -140,190 +61,239 @@ env:
         "pick_rate": 63.25,
         "win_rate_delta": 29.86,
         "skada_score": 1104.7,
-        "rank": 70,
+        "rank": 1,
         "confidence": "high",
         "display_name": { "en": "Offering", "zh": "祭品" }
       }
-    ],
-    "SILENT": [],
-    "DEFECT": [],
-    "AWAKENEDONE": []
+    ]
   }
 }
 ```
 
-保留字段：核心统计（pick_rate, win_rate_delta, skada_score, rank, confidence）+ display_name
-丢弃冗余字段：character、card_pool、card_pool_name、seen 等游戏内已有的数据
-
-### 本地缓存文件
-
-路径：`%LOCALAPPDATA%/STS2Agent/cards_cache.json`
-远程 URL 配置文件：`%LOCALAPPDATA%/STS2Agent/card_stats_url.txt`
+**data_url.txt**（每行一个 URL）：
+```
+https://bucket.oss-cn-hangzhou.aliyuncs.com/STS2/ironclad/card_stats.json
+https://bucket.oss-cn-hangzhou.aliyuncs.com/STS2/silent/card_stats.json
+https://bucket.oss-cn-hangzhou.aliyuncs.com/STS2/defect/card_stats.json
+https://bucket.oss-cn-hangzhou.aliyuncs.com/STS2/necrobinder/card_stats.json
+https://bucket.oss-cn-hangzhou.aliyuncs.com/STS2/regent/card_stats.json
+```
 
 ---
 
-## 第三步：C# CardStatsService
+## 关键文件
 
-### 新建 `mod/Services/CardStatsService.cs`
-
-**职责**：远程拉取数据 + 本地缓存 + 内存查询。
-
-```csharp
-public class CardStatsService
-{
-    // 启动时（Initialize）中：
-    // 1. 检查本地缓存是否在 TTL（24h）内
-    //    - 有效 -> 直接从本地文件加载到内存
-    //    - 无效或不存在 -> 尝试联网拉取
-    // 2. 联网拉取：
-    //    - 读取 card_stats_url.txt 获取远程 URL
-    //    - HttpClient.GetAsync(url) -> 写入本地文件 -> 加载到内存
-    //    - 网络失败 -> fallback 到本地缓存（即使过期）
-    // 3. 内存结构：Dictionary<string, CardStats>  // key = "CHARACTER:CardId"
-
-    public CardStats? GetStats(string character, string cardId);
-    public bool IsLoaded { get; }
-}
-```
-
-**CardStats 模型**：
-
-```csharp
-public class CardStats
-{
-    public string CardId { get; set; }
-    public string Character { get; set; }
-    public float PickRate { get; set; }
-    public float WinRateDelta { get; set; }
-    public float SkadaScore { get; set; }
-    public int Rank { get; set; }
-    public string Confidence { get; set; }
-    public string DisplayNameZh { get; set; }
-}
-```
-
-**TTL 策略**：启动时检查，本地文件 `updated_at` 超过 24h 则尝试联网刷新。游戏内不主动刷新，下次启动再检。
-
-**离线兜底**：网络失败时，即使本地缓存过期也照常使用，确保游戏内断网不报错。
-
-### 注册到 `STS2Agent.Initialize()`
-
-```csharp
-_cardStatsService = new CardStatsService();
-```
-
-### 日志
-
-写入 `mods/STS2Agent/logs/card_stats.log`：
-
-- 缓存命中（本地有效）
-- 远程拉取成功
-- 远程拉取失败 + fallback 到本地
-- 内存中无数据（首次运行）
-- 查询未命中的卡牌（正常现象，新卡）
+| 操作 | 文件路径 | 说明 |
+|------|----------|------|
+| 新建 | `src/Data/scraper.py` | 爬虫核心，HMAC 签名请求 |
+| 新建 | `src/Data/uploader.py` | OSS 上传，支持动态 object_key |
+| 新建 | `src/Data/cli.py` | CLI 入口 |
+| 新建 | `mod/Services/CardStatsService.cs` | 拉取 + 缓存 + 查询 |
+| 新建 | `mod/Models/CardStats.cs` | 数据模型 |
+| 修改 | `mod/Models/CardRewardInfo.cs` | 增加场外字段 |
+| 修改 | `mod/STS2Agent.cs` | 接入 CardStatsService |
 
 ---
 
-## 第四步：修改 `/api/CardReward` 返回附加数据
+## CLI 命令
 
-### 4.1 修改 `mod/Models/CardRewardInfo.cs`
-
-在 `RewardCardInfo` 中增加场外数据字段（可空，网络/缓存不可用时为 null）：
-
-```csharp
-public class RewardCardInfo
-{
-    // 现有字段...
-
-    // 场外统计数据
-    public float? PickRate { get; set; }
-    public float? WinRateDelta { get; set; }
-    public float? SkadaScore { get; set; }
-    public int? Rank { get; set; }
-    public string? Confidence { get; set; }
-    public string? DisplayNameZh { get; set; }
-}
+```bash
+python -m src.Data.cli                      # 抓取 + 上传（完整流程）
+python -m src.Data.cli --scrape-only        # 仅抓取
+python -m src.Data.cli --upload-only        # 仅上传
+python -m src.Data.cli --char ironclad      # 单角色抓取
+python -m src.Data.cli --url                # 输出所有 URL
 ```
 
-### 4.2 修改 `STS2Agent.cs` 的 `HandleCardRewardRequest`
+**环境变量**（`.env`）：
+```
+OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
+OSS_BUCKET=your-bucket
+OSS_KEY=your-access-key-id
+OSS_SECRET=your-access-key-secret
+DATA_URL_FILE=./data_url.txt
+```
 
-```csharp
-private static void HandleCardRewardRequest(HttpListenerContext context)
+---
+
+## 测试验证
+
+### 第一阶段：Python 端
+
+**1.1 配置环境变量**
+
+创建 `.env` 文件或设置环境变量，确保 OSS 配置正确。
+
+**1.2 运行完整流程**
+
+```bash
+python -m src.Data.cli
+```
+
+**1.3 验证 OSS**
+
+- 登录阿里云 OSS 控制台，确认 5 个 JSON 文件已上传
+- 确认文件内容包含 `data` 字段
+
+**1.4 验证 data_url.txt**
+
+```bash
+cat data_url.txt
+```
+
+应包含 5 行 URL。
+
+**1.5 验证单角色抓取**
+
+```bash
+python -m src.Data.cli --char ironclad --scrape-only
+```
+
+---
+
+### 第二阶段：C# 端
+
+**2.1 首次启动（冷启动）**
+
+启动游戏，观察日志：
+
+```
+%LOCALAPPDATA%/STS2Agent/logs/card_stats.log
+```
+
+**2.2 验证缓存文件**
+
+```bash
+# 检查本地缓存是否存在
+cat "%LOCALAPPDATA%/STS2Agent/cards_cache.json" | head -50
+```
+
+确认：
+- `version` 字段为 1
+- `updated_at` 为当前时间
+- `characters` 包含所有 5 个角色
+- 每个角色的 `data` 数组包含卡牌
+
+**2.3 缓存命中测试**
+
+保持游戏运行，关闭后重新启动。
+
+预期日志：
+```
+[INFO] === CardStatsService 初始化 ===
+[INFO] 本地缓存文件存在
+[INFO] 缓存年龄: 0.1 小时, 有效: True
+[INFO] 从本地缓存加载完成，共 XXX 张卡牌
+```
+
+**2.4 缓存过期测试**
+
+手动修改缓存文件中的 `updated_at` 为 25 小时前：
+```bash
+# 临时修改缓存为过期状态
+$json = Get-Content "$env:LOCALAPPDATA\STS2Agent\cards_cache.json" -Raw | ConvertFrom-Json
+$json.updated_at = (Get-Date).AddHours(-25).ToString("yyyy-MM-ddTHH:mm:ss+08:00")
+$json | ConvertTo-Json -Depth 10 | Set-Content "$env:LOCALAPPDATA\STS2Agent\cards_cache.json"
+```
+
+重新启动游戏，预期日志：
+```
+[INFO] 缓存年龄: 25.0 小时, 有效: False
+[INFO] 本地缓存已过期或不存在，尝试联网拉取
+[INFO] 正在拉取: ...
+[INFO] 远程拉取成功
+```
+
+**2.5 离线 fallback 测试**
+
+1. 断网（或修改 `data_url.txt` 指向无效 URL）
+2. 删除 `%LOCALAPPDATA%/STS2Agent/cards_cache.json`
+3. 启动游戏
+
+预期日志：
+```
+[INFO] 本地缓存已过期或不存在，尝试联网拉取
+[ERROR] 远程拉取失败: ...
+[INFO] 联网失败，fallback 到过期本地缓存
+[INFO] 从本地缓存加载完成，共 XXX 张卡牌
+```
+
+---
+
+### 第三阶段：API 集成
+
+**3.1 触发卡牌奖励界面**
+
+在游戏中进入卡牌奖励界面（打完一场战斗后）。
+
+**3.2 验证 API 响应**
+
+```bash
+curl http://localhost:8888/api/CardReward
+```
+
+预期响应包含 `cards` 数组，每个卡牌有场外字段：
+```json
 {
-    var reward = _cardRewardService?.GetCurrentReward();
-    if (reward != null && reward.IsVisible)
+  "hasReward": true,
+  "isVisible": true,
+  "canReroll": true,
+  "canSkip": true,
+  "cards": [
     {
-        var character = DetectCharacter(reward);
-        var stats = _cardStatsService;
-
-        var response = new
-        {
-            hasReward = true,
-            isVisible = reward.IsVisible,
-            canReroll = reward.CanReroll,
-            canSkip = reward.CanSkip,
-            cards = reward.Cards.Select(c =>
-            {
-                var s = stats?.GetStats(character, c.CardId);
-                return new {
-                    cardId = c.CardId,
-                    name = c.Name,
-                    cost = c.Cost,
-                    rarity = c.Rarity,
-                    type = c.Type,
-                    isUpgraded = c.IsUpgraded,
-                    // 场外数据（可空）
-                    pickRate = s?.PickRate,
-                    winRateDelta = s?.WinRateDelta,
-                    skadaScore = s?.SkadaScore,
-                    rank = s?.Rank,
-                    confidence = s?.Confidence,
-                    displayNameZh = s?.DisplayNameZh,
-                };
-            }).ToList()
-        };
-        SendJson(context, response);
+      "cardId": "STRIKE",
+      "name": "打击",
+      "cost": 1,
+      "rarity": "starter",
+      "type": "attack",
+      "isUpgraded": false,
+      "pickRate": 42.5,
+      "winRateDelta": -3.2,
+      "skadaScore": 85.3,
+      "rank": 35,
+      "confidence": "high",
+      "displayNameZh": "打击"
     }
-    else
-    {
-        SendJson(context, new { hasReward = false });
-    }
+  ]
 }
 ```
 
-**当前角色检测**：通过 `GameStateService` 获取当前 `PlayerState`，从  `PlayerState` 中推断当前角色。
+**3.3 验证 null 情况**
+
+对于新卡牌（OSS 中不存在的卡牌），场外字段应为 `null`：
+```json
+{
+  "cardId": "NEW_CARD_2026",
+  "pickRate": null,
+  "winRateDelta": null,
+  "skadaScore": null,
+  "rank": null,
+  "confidence": null,
+  "displayNameZh": null
+}
+```
+
+**3.4 AI Client 验证**
+
+确认 AI Client 收到的请求中包含 `pickRate`、`winRateDelta`、`skadaScore` 等字段。
 
 ---
 
-## 第五步：测试验证
+## 常见问题
 
-1. 运行 STS2Data 的爬虫 + 上传，验证 OSS/CDN 上有数据
-2. 在 STS2Agent 机器上手动删除本地缓存，启动游戏，验证远程拉取成功
-3. 断网场景下启动游戏，验证 fallback 到过期本地缓存
-4. 触发卡牌奖励界面，`GET http://localhost:8888/api/CardReward` 验证响应中包含场外字段
-
----
-
-## 关键文件清单
-
-| 操作 | STS2Data 项目 | STS2Agent 项目 |
-|------|---------------|---------------|
-| 新建 | `STS2Data/pyproject.toml` | - |
-| 新建 | `STS2Data/src/scraper.py` | - |
-| 新建 | `STS2Data/src/uploader.py` | - |
-| 新建 | `STS2Data/src/cli.py` | - |
-| 新建 | `STS2Data/.github/workflows/daily-scrape.yml` | - |
-| 新建 | - | `mod/Services/CardStatsService.cs` |
-| 修改 | - | `mod/Models/CardRewardInfo.cs` |
-| 修改 | - | `mod/STS2Agent.cs` |
-| 不改 | `test/test_cards_scraper.py` | - |
-
----
-
-## 依赖说明
-
-| 依赖 | 用途 | 安装 |
+| 问题 | 原因 | 解决 |
 |------|------|------|
-| oss2 | 阿里云 OSS 上传 | `pip install oss2` |
-| HttpClient（C# 内置） | 远程拉取 JSON | .NET 内置 |
-| System.Text.Json（C# 内置） | JSON 解析 | .NET 内置 |
+| `OSS upload failed` | OSS 配置错误或权限不足 | 检查 OSS_ENDPOINT、BUCKET、KEY、SECRET |
+| `远程拉取失败` | 网络问题或 URL 错误 | 检查 data_url.txt 是否正确 |
+| 卡牌数据为空 | 缓存文件损坏 | 删除缓存重启游戏 |
+| 部分 URL 拉取失败 | 单个 OSS 文件不存在 | 重新运行 `python -m src.Data.cli` |
+
+---
+
+## 日志路径
+
+| 类型 | 路径 |
+|------|------|
+| CardStatsService 日志 | `%LOCALAPPDATA%/STS2Agent/logs/card_stats.log` |
+| 本地缓存 | `%LOCALAPPDATA%/STS2Agent/cards_cache.json` |
+| URL 配置 | `data_url.txt`（Python 执行目录） |

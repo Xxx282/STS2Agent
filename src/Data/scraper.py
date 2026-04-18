@@ -1,14 +1,14 @@
+"""STS2 卡牌数据爬虫 - 从 sts2log.com 抓取社区统计数据"""
+
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
 import logging
-import re
-import sys
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -17,8 +17,16 @@ import requests
 
 SITE = "https://sts2log.com"
 API_CARDS_URL = f"{SITE}/api/cards"
-OUTPUT_DIR = Path(__file__).parent
-OUTPUT_FILE = OUTPUT_DIR / "cards_data.json"
+ALL_CHARS = ["IRONCLAD", "SILENT", "DEFECT", "NECROBINDER", "REGENT"]
+
+# OSS 角色路径映射（API 角色名 -> OSS 文件夹）
+CHAR_TO_FOLDER = {
+    "IRONCLAD": "ironclad",
+    "SILENT": "silent",
+    "DEFECT": "defect",
+    "NECROBINDER": "necrobinder",
+    "REGENT": "regent",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,14 +34,67 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALL_CHARS = ["IRONCLAD", "SILENT", "DEFECT", "NECROBINDER", "REGENT"]
-
 
 @dataclass
 class ScraperResult:
     success: bool
     data: list[dict[str, Any]] | None = None
     error: str | None = None
+
+
+@dataclass
+class CardStatsOutput:
+    """最终输出的 JSON 结构"""
+    version: int = 1
+    updated_at: str = ""
+    characters: list[str] = None
+    data: dict[str, list[dict[str, Any]]] = None
+
+    def __post_init__(self):
+        if self.characters is None:
+            self.characters = ALL_CHARS.copy()
+        if self.data is None:
+            self.data = {char: [] for char in ALL_CHARS}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "updated_at": self.updated_at,
+            "characters": self.characters,
+            "data": self.data,
+        }
+
+    def save(self, path: str | Path) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+        logger.info("数据已保存至: %s", path)
+
+    def save_per_char(self, output_dir: str | Path) -> dict[str, Path]:
+        """按角色分别保存为独立 JSON 文件，返回 {角色: 文件路径}"""
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        saved = {}
+        for char, cards in self.data.items():
+            char_lower = char.lower()
+            folder = CHAR_TO_FOLDER.get(char, char_lower)
+            file_path = out_dir / folder / "card_stats.json"
+
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            char_data = {
+                "version": self.version,
+                "updated_at": self.updated_at,
+                "characters": [char],
+                "data": {char: cards},
+            }
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(char_data, f, ensure_ascii=False, indent=2)
+
+            saved[char] = file_path
+            logger.info("角色 %s 数据已保存至: %s", char, file_path)
+
+        return saved
 
 
 class STS2CardScraper:
@@ -55,21 +116,13 @@ class STS2CardScraper:
         }
 
     def _update_skada_headers(self, url: str, params: dict[str, str]) -> dict[str, str]:
-        """根据当前时间生成 x-skada-t，并用 HMAC-SHA256 生成 x-skada-s"""
         t = str(int(time.time()))
-
-        # 按 key 排序参数
         sorted_params = OrderedDict(sorted(params.items()))
         query_string = urlencode(sorted_params)
-
-        # 构造签名原文: t:pathname?排序后的参数
         path = urlparse(url).path
         sign_string = f"{t}:{path}?{query_string}" if query_string else f"{t}:{path}"
-
-        # HMAC-SHA256 签名，密钥硬编码在 JS 中
         secret = "xK7m2pQ9dR4wF1jN8sL3vB6hY0tG5cA"
         signature = hmac.new(secret.encode(), sign_string.encode(), hashlib.sha256).hexdigest()
-
         return {
             "x-skada-t": t,
             "x-skada-s": signature,
@@ -84,15 +137,13 @@ class STS2CardScraper:
         }
 
     def init_session(self) -> bool:
-        """访问主页获取 cookies"""
-        logger.info("初始化 session，访问主页获取 cookies...")
         try:
             self.session.get(SITE, timeout=15)
             self.session.get(f"{SITE}/cards", timeout=15)
-            logger.info("主页 cookies 获取完成，当前 cookies: %s", dict(self.session.cookies))
+            logger.info("Session 初始化完成")
             return True
         except Exception as e:
-            logger.error("初始化 session 失败: %s", e)
+            logger.error("Session 初始化失败: %s", e)
             return False
 
     def fetch_api(
@@ -112,46 +163,16 @@ class STS2CardScraper:
         }
         headers = self._build_headers(API_CARDS_URL, params)
 
-        logger.info("请求 URL: %s", API_CARDS_URL)
-        logger.info("请求参数: %s", params)
-        skada_s = headers.get("x-skada-s", "N/A")
-        skada_t = headers.get("x-skada-t", "N/A")
-        logger.info("请求头 x-skada-s: %s", skada_s)
-        logger.info("请求头 x-skada-t: %s", skada_t)
-
         try:
             resp = self.session.get(API_CARDS_URL, params=params, headers=headers, timeout=30)
-            logger.info("响应状态码: %d", resp.status_code)
-            logger.info("响应头 Content-Type: %s", resp.headers.get("Content-Type"))
-
             resp.raise_for_status()
-            data = resp.json()
-
-            # 输出完整的响应结构
-            logger.info("=" * 60)
-            logger.info("原始响应结构 (keys): %s", list(data.keys()) if isinstance(data, dict) else type(data))
-            if isinstance(data, dict):
-                for key, value in data.items():
-                    if isinstance(value, list):
-                        logger.info("  %s: list[dict], 长度=%d", key, len(value))
-                        if value:
-                            logger.info("  %s[0] keys: %s", key, list(value[0].keys()) if isinstance(value[0], dict) else type(value[0]))
-                    elif isinstance(value, dict):
-                        logger.info("  %s: dict, keys=%s", key, list(value.keys()))
-                    else:
-                        logger.info("  %s: %s", key, type(value).__name__)
-            logger.info("=" * 60)
-
-            return data
-        except requests.exceptions.RequestException as e:
-            logger.error("API 请求失败: %s", e)
-            return None
-        except json.JSONDecodeError as e:
-            logger.error("JSON 解析失败: %s，响应内容: %s", e, resp.text[:500])
+            return resp.json()
+        except Exception as e:
+            logger.error("[%s] 第 %d 页请求失败: %s", char, page, e)
             return None
 
     def scrape(self, chars: list[str] | None = None) -> ScraperResult:
-        chars = chars or ["IRONCLAD"]  # 默认只爬 IRONCLAD
+        chars = chars or ["IRONCLAD"]
 
         if not self.init_session():
             return ScraperResult(success=False, error="session 初始化失败")
@@ -169,12 +190,6 @@ class STS2CardScraper:
                     logger.warning("[%s] 请求失败，停止翻页", char)
                     break
 
-                # 调试：打印原始响应结构
-                if page == 1:
-                    logger.info("[DEBUG] 原始响应 keys: %s",
-                                list(raw.keys()) if isinstance(raw, dict) else type(raw))
-
-                # 提取数据列表（API 返回 { cards: [...], pagination: {...} }）
                 if isinstance(raw, dict):
                     items = raw.get("cards", [])
                     pagination = raw.get("pagination", {})
@@ -189,12 +204,11 @@ class STS2CardScraper:
                     logger.warning("[%s] 第 %d 页无数据，停止翻页", char, page)
                     break
 
-                logger.info("[%s] 第 %d/%d 页: 获取 %d 条卡牌", char, page, total_pages, len(items))
+                logger.info("[%s] 第 %d/%d 页: 获取 %d 条", char, page, total_pages, len(items))
                 all_cards.extend(items)
 
                 if page == 1:
                     logger.info("[%s] 共 %d 页，总计 %d 条", char, total_pages, total_items)
-                    logger.info("[DEBUG] 第一张卡牌字段: %s", list(items[0].keys()) if items else "无")
 
                 page += 1
                 page_count += 1
@@ -206,40 +220,57 @@ class STS2CardScraper:
 
         return ScraperResult(success=True, data=all_cards)
 
-        if not all_cards:
-            return ScraperResult(success=False, error="未获取到任何卡牌数据")
+    def scrape_all(self) -> CardStatsOutput:
+        """抓取所有角色数据并整理为标准输出格式"""
+        result = self.scrape(ALL_CHARS)
+        if not result.success:
+            logger.error("抓取失败: %s", result.error)
+            return CardStatsOutput()
 
-        return ScraperResult(success=True, data=all_cards)
+        cards = result.data or []
 
+        output = CardStatsOutput()
+        output.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
-def main() -> int:
-    print("=" * 60)
-    print("STS2 卡牌数据抓取测试")
-    print("=" * 60)
+        # 按角色分组
+        for card in cards:
+            char = card.get("character", "UNKNOWN")
+            if char not in output.data:
+                output.data[char] = []
 
-    scraper = STS2CardScraper()
+            # 提取核心统计字段
+            stats = self._extract_stats(card)
+            output.data[char].append(stats)
 
-    result = scraper.scrape()
+        # 对每个角色的数据按 skada_score 降序排列
+        for char in output.data:
+            output.data[char].sort(key=lambda x: x.get("skada_score", 0), reverse=True)
+            # 添加 rank
+            for i, item in enumerate(output.data[char], 1):
+                item["rank"] = i
 
-    if not result.success:
-        print(f"\n抓取失败: {result.error}")
-        return 1
+        return output
 
-    data = result.data
-    logger.info("成功抓取 %d 张卡牌", len(data))
+    def _extract_stats(self, card: dict[str, Any]) -> dict[str, Any]:
+        """从原始卡牌数据中提取需要的统计字段"""
+        # 尝试获取 display_name
+        display_name = card.get("display_name", {})
+        if isinstance(display_name, dict):
+            name_zh = display_name.get("zh") or display_name.get("en", "")
+            name_en = display_name.get("en", "")
+        else:
+            name_zh = ""
+            name_en = str(display_name) if display_name else ""
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    logger.info("数据已保存至: %s", OUTPUT_FILE)
-
-    print("\n前 5 张卡牌预览:")
-    for card in data[:5]:
-        logger.info("card keys: %s", list(card.keys()))
-        print(f"  - {card}")
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        return {
+            "card_id": card.get("card_id") or card.get("id") or "",
+            "pick_rate": card.get("pick_rate") or 0.0,
+            "win_rate_delta": card.get("win_rate_delta") or 0.0,
+            "skada_score": card.get("skada_score") or 0.0,
+            "rank": 0,
+            "confidence": card.get("confidence", "low"),
+            "display_name": {
+                "en": name_en,
+                "zh": name_zh,
+            },
+        }

@@ -677,14 +677,15 @@ public class CardRewardService
             if (string.IsNullOrEmpty(name))
                 name = GetProperty<string>(card, "Name") ?? cardId;
 
-            // Cost: CardEnergyCost -> Canonical
-            var costObj = GetProperty<object>(card, "Cost");
+            // Cost: CardEnergyCost -> Canonical (属性名是 EnergyCost)
+            var costObj = GetProperty<object>(card, "EnergyCost") ?? GetProperty<object>(card, "Cost");
             if (costObj != null)
             {
                 var costType = costObj.GetType();
-                cost = costType.GetProperty("Canonical", BindingFlags.Public | BindingFlags.Instance)?.GetValue(costObj) as int? ?? 0;
-                if (cost == 0)
-                    cost = costType.GetProperty("Value", BindingFlags.Public | BindingFlags.Instance)?.GetValue(costObj) as int? ?? 0;
+                var canonical = costType.GetProperty("Canonical", BindingFlags.Public | BindingFlags.Instance)?.GetValue(costObj);
+                if (canonical is int c) cost = c;
+                else if (canonical is Enum e) cost = Convert.ToInt32(e);
+                else if (canonical != null) cost = Convert.ToInt32(canonical);
             }
 
             // Rarity - 尝试多个可能的属性名

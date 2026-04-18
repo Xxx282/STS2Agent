@@ -18,4 +18,12 @@ public class RewardCardInfo
     public string Rarity { get; set; } = "Unknown";
     public string Type { get; set; } = "Unknown";
     public bool IsUpgraded { get; set; }
+
+    // 场外统计数据（可空，缓存不可用时为 null）
+    public float? PickRate { get; set; }
+    public float? WinRateDelta { get; set; }
+    public float? SkadaScore { get; set; }
+    public int? Rank { get; set; }
+    public string? Confidence { get; set; }
+    public string? DisplayNameZh { get; set; }
 }

@@ -10,15 +10,40 @@ obj/
 .vs/
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Test outputs
+test/__pycache__/
+test/*.log
+test/output/
 
 # Logs
+logs/
 *.log
 
 # Mod build output (dll/pck files should be built locally)
 *.dll
 *.pck
 *.pdb
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
