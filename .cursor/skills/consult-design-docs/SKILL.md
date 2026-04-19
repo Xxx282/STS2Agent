@@ -1,6 +1,6 @@
 ---
 name: consult-design-docs
-description: Consult design documentation in dict/ before implementing features or making changes. Use when implementing new features, modifying existing code, or when the user asks about architecture or design patterns. Always check relevant dict/ files first to ensure consistency with the established design.
+description: Consult design documentation in dict/ before implementing features or making changes. Use when implementing new features, modifying existing code, or when the user asks about architecture or design patterns, or when debugging errors. Always check relevant dict/ files first to ensure consistency with the established design.
 ---
 
 # Consult Design Documentation
@@ -65,6 +65,81 @@ After implementation:
 - If design is outdated or needs adjustment, update corresponding `dict/` docs
 - Reference relevant design docs in commit messages
 
+## Error Troubleshooting Workflow
+
+When user reports an issue or error:
+
+### Step 1: Check Mod Logs
+
+**Log Location**: `D:\steam\steamapps\common\Slay the Spire 2\mods\STS2Agent\logs\`
+
+Available log files:
+- `debug.log` - General debugging information
+- `card_reward.log` - Card reward specific logs
+- Other `[feature].log` files for specific modules
+
+**Before providing any solution**, MUST check relevant logs to understand the actual error.
+
+### Step 2: Check Project README
+
+Read `README.md` for:
+- Project structure overview
+- Build and deployment instructions
+- API endpoints and usage
+- Environment configuration
+
+### Step 3: Analyze and Diagnose
+
+Based on log contents:
+1. Identify the error type and location
+2. Cross-reference with `dict/model/` documentation
+3. Check if the implementation matches documented design
+4. Determine root cause
+
+### Step 4: Provide Solution
+
+If fix is possible:
+- Explain what went wrong
+- Provide corrected code based on design documentation
+- Reference relevant `dict/` files
+
+If root cause is unclear:
+- Follow the **User Information Collection Format** below
+- Ask user to provide missing information
+
+## User Information Collection Format
+
+When diagnostic information is insufficient, ask user to provide:
+
+```
+## Required Information
+
+### 1. Problem Description
+[What were you trying to do?]
+
+### 2. Expected Behavior
+[What should have happened?]
+
+### 3. Actual Behavior
+[What actually happened?]
+
+### 4. Log Files
+Please share the content of relevant log files from:
+`D:\steam\steamapps\common\Slay the Spire 2\mods\STS2Agent\logs\`
+- `debug.log`
+- [Other relevant log files]
+
+### 5. Environment
+- Game version: [Check in-game]
+- Mod version: [Check mod listing]
+- Steps to reproduce: [How can I replicate this issue?]
+
+### 6. Recent Changes
+[Any recent code changes or configuration updates?]
+```
+
+**IMPORTANT**: Do NOT make up or guess any of the above information. Only provide information that can be verified from logs, documentation, or user input.
+
 ## Critical Rules
 
 ### Mandatory Rules
@@ -88,6 +163,14 @@ After implementation:
 - **MUST** base all implementations on documented structures in `dict/model/` files
 - **MUST** verify existence of fields/properties by checking both docs and existing code
 
+### Error Diagnosis Rules
+
+- **MUST** check mod logs before providing any solution
+- **MUST** reference design documentation when explaining errors
+- **MUST** use the standard User Information Collection Format when logs are insufficient
+- **DO NOT** guess error causes without log evidence
+- **DO NOT** provide solutions based on assumptions - verify with logs first
+
 ## Quick Reference
 
 ```bash
@@ -105,18 +188,27 @@ cat dict/service/tech.md
 
 # View specific system (e.g., cards)
 cat dict/model/card.md
+
+# View project README
+cat README.md
+
+# View mod logs (Windows path)
+# D:\steam\steamapps\common\Slay the Spire 2\mods\STS2Agent\logs\
 ```
 
 ## Example Scenarios
 
 **Scenario 1: Adding new card**
-鈫?Consult `dict/model/card.md` for `CardModel` structure 鈫?Consult `dict/model/flow.md` for card play flow 鈫?Review existing card implementations 鈫?Implement
+-> Consult `dict/model/card.md` for `CardModel` structure -> Consult `dict/model/flow.md` for card play flow -> Review existing card implementations -> Implement
 
 **Scenario 2: Modifying combat logic**
-鈫?Consult `dict/model/combat.md` 鈫?Consult `dict/model/flow.md` combat flow 鈫?Consult `dict/service/hook.md` for appropriate hook 鈫?Implement
+-> Consult `dict/model/combat.md` -> Consult `dict/model/flow.md` combat flow -> Consult `dict/service/hook.md` for appropriate hook -> Implement
 
 **Scenario 3: Adding new relic**
-鈫?Consult `dict/model/relic.md` 鈫?Review existing relic implementations 鈫?Note `RelicOn` queue timing 鈫?Implement
+-> Consult `dict/model/relic.md` -> Review existing relic implementations -> Note `RelicOn` queue timing -> Implement
 
 **Scenario 4: Multiplayer feature**
-鈫?Consult `dict/model/multiplayer.md` 鈫?Understand action queue sync 鈫?Understand state sync mechanism 鈫?Implement
+-> Consult `dict/model/multiplayer.md` -> Understand action queue sync -> Understand state sync mechanism -> Implement
+
+**Scenario 5: Debugging an error**
+-> Check `D:\steam\steamapps\common\Slay the Spire 2\mods\STS2Agent\logs\debug.log` -> Read `README.md` -> Cross-reference with `dict/` docs -> If insufficient, ask user for information using standard format -> Provide solution based on verified evidence

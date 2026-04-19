@@ -18,6 +18,8 @@ public class CardRewardService
     private readonly string _logFilePath;
     private readonly object _logLock = new();
     private int _updateCounter;
+    private CardStatsService? _cardStatsService;
+    private string _currentCharacter = "IRONCLAD";
 
     // Hook 拦截相关（预留）
     // 注意：通过反射拦截 Hook 需要 IL 编织，暂时使用 Godot 节点扫描方案
@@ -51,6 +53,34 @@ public class CardRewardService
         Directory.CreateDirectory(logDir);
         _logFilePath = Path.Combine(logDir, "card_reward.log");
         Log("CardRewardService 初始化完成");
+    }
+
+    public void SetCardStatsService(CardStatsService cardStatsService)
+    {
+        _cardStatsService = cardStatsService;
+    }
+
+    public void SetCharacter(string character)
+    {
+        _currentCharacter = character;
+    }
+
+    private void InjectStatsToReward(CardRewardInfo reward)
+    {
+        if (_cardStatsService == null || !reward.IsVisible || reward.Cards.Count == 0) return;
+        foreach (var card in reward.Cards)
+        {
+            var stats = _cardStatsService.GetStats(_currentCharacter, card.CardId, card.EnglishId);
+            if (stats != null)
+            {
+                card.PickRate = stats.PickRate;
+                card.WinRateDelta = stats.WinRateDelta;
+                card.SkadaScore = stats.SkadaScore;
+                card.HoldStrength = stats.HoldStrength != 0 ? stats.HoldStrength : stats.WinRateDelta;
+                card.Rank = stats.Rank;
+                card.DisplayNameZh = stats.DisplayNameZh;
+            }
+        }
     }
 
     public CardRewardInfo GetCurrentReward()
@@ -92,6 +122,9 @@ public class CardRewardService
                     bool newAppeared = !_currentReward.IsVisible && newReward.IsVisible;
                     bool disappeared = _currentReward.IsVisible && !newReward.IsVisible;
                     _currentReward = newReward;
+
+                    // 注入统计数据
+                    InjectStatsToReward(_currentReward);
 
                     // 状态变化时记录日志
                     Log($"[状态变化] IsVisible={newReward.IsVisible}, Cards={newReward.Cards.Count}, Source={newReward.RewardSource}");
@@ -300,6 +333,8 @@ public class CardRewardService
             {
                 reward.IsVisible = true;
                 reward.CardCount = reward.Cards.Count;
+                // Godot节点路径：尝试从界面节点扫描Skip/Reroll按钮状态
+                TryExtractSkipRerollFromNodes(foundNode, ref reward);
                 return;
             }
 
@@ -307,6 +342,7 @@ public class CardRewardService
             if (ExtractCardsFromChildNodes(foundNode, ref reward))
             {
                 reward.IsVisible = true;
+                TryExtractSkipRerollFromNodes(foundNode, ref reward);
                 return;
             }
 
@@ -337,10 +373,12 @@ public class CardRewardService
                     childType.FullName?.Contains("CardSlot") == true ||
                     childType.FullName?.Contains("OptionSlot") == true)
                 {
-                    // 尝试从持有者中提取卡牌信息
-                    var cardInfo = ExtractCardFromNodeOrHolder(child);
+                    // 尝试从持有者中提取卡牌信息（含节点坐标）
+                    var cardInfo = ExtractCardFromNodeOrHolder(child, out float? sx, out float? sy);
                     if (cardInfo != null && !reward.Cards.Any(c => c.CardId == cardInfo.CardId))
                     {
+                        cardInfo.ScreenX = sx;
+                        cardInfo.ScreenY = sy;
                         reward.Cards.Add(cardInfo);
                     }
                 }
@@ -460,6 +498,89 @@ public class CardRewardService
         catch { return false; }
     }
 
+    // 从Godot节点扫描Skip/Reroll按钮状态
+    private void TryExtractSkipRerollFromNodes(Godot.Node screenNode, ref CardRewardInfo reward)
+    {
+        try
+        {
+            // 收集所有子节点
+            var allChildren = new List<Godot.Node>();
+            CollectAllChildren(screenNode, allChildren, 0, 10);
+
+            foreach (var child in allChildren)
+            {
+                var childName = child.Name?.ToString().ToLowerInvariant() ?? "";
+                var childTypeName = child.GetType().Name?.ToLowerInvariant() ?? "";
+
+                // 检查Skip按钮
+                if (childName.Contains("skip") || childTypeName.Contains("skip") ||
+                    childName.Contains("accept") || childTypeName.Contains("accept"))
+                {
+                    var disabled = IsNodeDisabled(child);
+                    if (!disabled)
+                    {
+                        reward.CanSkip = true;
+                    }
+                }
+
+                // 检查Reroll按钮
+                if (childName.Contains("reroll") || childTypeName.Contains("reroll") ||
+                    childName.Contains("reroll") || childTypeName.Contains("reroll"))
+                {
+                    var disabled = IsNodeDisabled(child);
+                    if (!disabled)
+                    {
+                        reward.CanReroll = true;
+                    }
+                }
+            }
+
+            // 如果没有找到明确的Skip/Reroll节点，但界面可见且有卡牌，默认允许Skip
+            if (!reward.CanSkip && reward.IsVisible && reward.Cards.Count > 0)
+            {
+                reward.CanSkip = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError("[SkipReroll提取] 异常", ex);
+        }
+    }
+
+    // 检查节点是否处于禁用状态
+    private bool IsNodeDisabled(Godot.Node node)
+    {
+        try
+        {
+            var nodeType = node.GetType();
+
+            // 检查 Disabled 属性
+            var disabledProp = nodeType.GetProperty("Disabled",
+                BindingFlags.Public | BindingFlags.Instance);
+            if (disabledProp != null)
+            {
+                var val = disabledProp.GetValue(node);
+                if (val is bool b) return b;
+            }
+
+            // 检查 ProcessMode (禁用时通常被设为 Disabled 或 Paused)
+            var processMode = nodeType.GetProperty("ProcessMode",
+                BindingFlags.Public | BindingFlags.Instance)?.GetValue(node);
+            if (processMode != null)
+            {
+                var pmStr = processMode.ToString();
+                if (pmStr != null && pmStr.Contains("Disabled")) return true;
+            }
+
+            // 检查 Modulate (完全透明则可能禁用)
+            var modulate = nodeType.GetProperty("Modulate",
+                BindingFlags.Public | BindingFlags.Instance)?.GetValue(node) as Godot.Color?;
+            if (modulate.HasValue && modulate.Value.A < 0.01f) return true;
+        }
+        catch { }
+        return false;
+    }
+
     private bool ExtractCardsFromScreen(Godot.Node screenNode, ref CardRewardInfo reward)
     {
         try
@@ -494,9 +615,11 @@ public class CardRewardService
                 int extractedCount = 0;
                 foreach (Godot.Node child in cardRow.GetChildren())
                 {
-                    var cardInfo = ExtractCardFromNodeOrHolder(child);
+                    var cardInfo = ExtractCardFromNodeOrHolder(child, out float? sx, out float? sy);
                     if (cardInfo != null)
                     {
+                        cardInfo.ScreenX = sx;
+                        cardInfo.ScreenY = sy;
                         reward.Cards.Add(cardInfo);
                         extractedCount++;
                     }
@@ -580,7 +703,7 @@ public class CardRewardService
                             itemCount++;
                             if (itemCount > 20) break;
                             if (item == null) continue;
-                            var cardInfo = ExtractCardFromOption(item) ?? ExtractCardFromNodeOrHolder(item);
+                            var cardInfo = ExtractCardFromOption(item) ?? ExtractCardFromNodeOrHolder(item, out _, out _);
                             if (cardInfo != null) foundCards.Add(cardInfo);
                         }
                         if (itemCount > 0 && itemCount <= 10 && foundCards.Count > 0)
@@ -757,9 +880,13 @@ public class CardRewardService
             }
             isUpgraded = GetPropertyBool(card, "IsUpgraded") ?? false;
 
+            // 从卡牌类名提取英文 API ID（如 Anger -> ANGER）
+            var englishId = ExtractEnglishIdFromType(cardType);
+
             return new RewardCardInfo
             {
                 CardId = cardId ?? name ?? "Unknown",
+                EnglishId = englishId ?? "",
                 Name = name ?? cardId ?? "Unknown",
                 Cost = cost,
                 Rarity = rarity,
@@ -774,45 +901,62 @@ public class CardRewardService
         return null;
     }
 
-    private RewardCardInfo? ExtractCardFromNodeOrHolder(object nodeOrHolder)
+    private RewardCardInfo? ExtractCardFromNodeOrHolder(Godot.Node? node, out float? screenX, out float? screenY)
     {
+        screenX = null;
+        screenY = null;
+
+        if (node != null)
+        {
+            try
+            {
+                if (node is Godot.Control ctrl)
+                {
+                    var pos = ctrl.GetGlobalPosition();
+                    var rect = ctrl.GetGlobalRect();
+                    screenX = pos.X + rect.Size.X / 2;
+                    screenY = pos.Y;
+                }
+            }
+            catch { }
+        }
+
+        object? nodeOrHolder = node;
         try
         {
-            var type = nodeOrHolder.GetType();
+            var type = nodeOrHolder?.GetType();
 
             // 方法1: 直接检查是否是 CardModel 类型
-            if (type.FullName?.Contains("CardModel") == true)
+            if (type?.FullName?.Contains("CardModel") == true)
             {
                 return ExtractCardFromNode(nodeOrHolder);
             }
 
             // 方法2: 检查 Card / CardNode / Model 属性
-            var cardProp = type.GetProperty("Card", BindingFlags.Public | BindingFlags.Instance);
+            var cardProp = type?.GetProperty("Card", BindingFlags.Public | BindingFlags.Instance);
             if (cardProp != null)
             {
                 var card = cardProp.GetValue(nodeOrHolder);
                 if (card != null) return ExtractCardFromNode(card);
             }
 
-            var cardNodeProp = type.GetProperty("CardNode", BindingFlags.Public | BindingFlags.Instance);
+            var cardNodeProp = type?.GetProperty("CardNode", BindingFlags.Public | BindingFlags.Instance);
             if (cardNodeProp != null)
             {
                 var cardNode = cardNodeProp.GetValue(nodeOrHolder);
                 if (cardNode != null)
                 {
-                    // NCard 可能有 Model 属性
                     var modelProp = cardNode.GetType().GetProperty("Model", BindingFlags.Public | BindingFlags.Instance);
                     if (modelProp != null)
                     {
                         var model = modelProp.GetValue(cardNode);
                         if (model != null) return ExtractCardFromNode(model);
                     }
-                    // 也可能是直接返回 CardModel
                     return ExtractCardFromNode(cardNode);
                 }
             }
 
-            var modelProp2 = type.GetProperty("Model", BindingFlags.Public | BindingFlags.Instance);
+            var modelProp2 = type?.GetProperty("Model", BindingFlags.Public | BindingFlags.Instance);
             if (modelProp2 != null)
             {
                 var model = modelProp2.GetValue(nodeOrHolder);
@@ -820,7 +964,7 @@ public class CardRewardService
             }
 
             // 方法3: 搜索内部字段
-            foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            foreach (var field in type?.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) ?? Array.Empty<FieldInfo>())
             {
                 if (field.FieldType.FullName?.Contains("CardModel") == true)
                 {
@@ -829,13 +973,22 @@ public class CardRewardService
                 }
             }
 
-            Log($"[OrHolder提取] 无法从 {type.FullName} 提取卡牌");
+            if (nodeOrHolder != null)
+                Log($"[OrHolder提取] 无法从 {type?.FullName} 提取卡牌");
         }
         catch (Exception ex)
         {
             LogError("[OrHolder提取] 异常", ex);
         }
         return null;
+    }
+
+    // 兼容重载：当无法获取节点时调用
+    private RewardCardInfo? ExtractCardFromNodeOrHolder(object? nodeOrHolder, out float? screenX, out float? screenY)
+    {
+        screenX = null;
+        screenY = null;
+        return ExtractCardFromNodeOrHolder(nodeOrHolder as Godot.Node, out screenX, out screenY);
     }
 
     private RewardCardInfo? ExtractCardFromOption(object option)
@@ -951,6 +1104,27 @@ public class CardRewardService
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(obj);
         if (v is bool b) return b;
         return null;
+    }
+
+    // 从卡牌类的 FullName 提取英文 API ID（如 "MegaCrit.Sts2.Core.Models.Cards.Anger" -> "ANGER"）
+    private string? ExtractEnglishIdFromType(Type cardType)
+    {
+        try
+        {
+            var fullName = cardType.FullName ?? "";
+            // 查找 "Cards." 之后的类名部分
+            var idx = fullName.LastIndexOf("Cards.");
+            if (idx < 0) return null;
+            var className = fullName[(idx + 6)..];
+            // 移除可能的嵌套类后缀（如 "$Card`1" 或其他）
+            idx = className.IndexOf('$');
+            if (idx >= 0) className = className[..idx];
+            return className.ToUpperInvariant();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private string? ExtractEnumName(object? enumObj)
@@ -1110,11 +1284,20 @@ public class CardRewardService
             Cards = info.Cards.Select(c => new RewardCardInfo
             {
                 CardId = c.CardId,
+                EnglishId = c.EnglishId,
                 Name = c.Name,
                 Cost = c.Cost,
                 Rarity = c.Rarity,
                 Type = c.Type,
-                IsUpgraded = c.IsUpgraded
+                IsUpgraded = c.IsUpgraded,
+                PickRate = c.PickRate,
+                WinRateDelta = c.WinRateDelta,
+                SkadaScore = c.SkadaScore,
+                HoldStrength = c.HoldStrength,
+                Rank = c.Rank,
+                DisplayNameZh = c.DisplayNameZh,
+                ScreenX = c.ScreenX,
+                ScreenY = c.ScreenY
             }).ToList()
         };
     }

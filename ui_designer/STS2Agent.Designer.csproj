@@ -1,0 +1,28 @@
+<Project Sdk="Godot.NET.Sdk/4.3.0">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>STS2Agent.Designer</RootNamespace>
+    <AssemblyName>STS2Agent.Designer</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableGodotExport>true</EnableGodotExport>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- 只引用 GodotSharp，不引用游戏 DLL -->
+  <ItemGroup>
+    <Reference Include="GodotSharp">
+      <HintPath>../mod/libs/GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharpEditor" Condition="Exists('../mod/libs/GodotSharpEditor.dll')">
+      <HintPath>../mod/libs/GodotSharpEditor.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- 复制 tscn 到 mod 目录的后置处理 -->
+  <Target Name="CopyTscnToMod" AfterTargets="Build">
+    <Copy SourceFiles="$(ProjectDir)scenes/CardTooltip.tscn" DestinationFolder="../mod/UI" Condition="Exists('$(ProjectDir)scenes/CardTooltip.tscn')" />
+  </Target>
+</Project>

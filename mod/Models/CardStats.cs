@@ -11,6 +11,10 @@ public class CardStats
     public string Confidence { get; set; } = "low";
     public DisplayName? DisplayName { get; set; }
 
+    // 持有实力：牌组里有vs没有的胜率差（逆方差加权）
+    // 远程数据没有时 fallback 到 WinRateDelta（选卡建议）
+    public float HoldStrength { get; set; }
+
     public string DisplayNameZh => DisplayName?.Zh ?? "";
     public string DisplayNameEn => DisplayName?.En ?? "";
 }

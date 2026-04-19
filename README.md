@@ -2,7 +2,7 @@
  * @Author: Mendax
  * @Date: 2026-04-13 22:35:28
  * @LastEditors: Mendax
- * @LastEditTime: 2026-04-18 23:35:59
+ * @LastEditTime: 2026-04-19 23:42:14
  * @Description: 
  * @FilePath: \STS2Agent\README.md
 -->
@@ -68,7 +68,9 @@ STS2Agent/
 3. 运行部署脚本
 
    ```bash
-   .\deploy.ps1
+   .\deploy.ps1 
+   .\deploy.ps1 -Force       # 游戏运行时强制重部署
+   .\deploy.ps1 -SkipBuild   # 只复制文件，不编译
    ```
 
 ## 环境配置
@@ -91,7 +93,7 @@ cp .env.example .env
 
 ## [API 文档](./mod/openapi.json) 
 
-运行端口 <http://localhost:8888>
+运行端口 <http://localhost:8890>
 
 | 端点 | 方法 | 描述 |
 | ---- | ---- | ---- |
@@ -106,6 +108,7 @@ cp .env.example .env
 
 - [x] 卡牌选择数据获取的测试(2026.4.18完成)
 - [x] 卡牌场外数据获取脚本测试
+- [ ] 卡牌奖励界面场外信息ui设计与测试
 
 ## 感谢
 

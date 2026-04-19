@@ -1,5 +1,0 @@
-https://sts2agent.oss-cn-hangzhou.aliyuncs.com/STS2/ironclad/card_stats.json
-https://sts2agent.oss-cn-hangzhou.aliyuncs.com/STS2/silent/card_stats.json
-https://sts2agent.oss-cn-hangzhou.aliyuncs.com/STS2/defect/card_stats.json
-https://sts2agent.oss-cn-hangzhou.aliyuncs.com/STS2/necrobinder/card_stats.json
-https://sts2agent.oss-cn-hangzhou.aliyuncs.com/STS2/regent/card_stats.json

@@ -13,6 +13,7 @@ public class CardRewardInfo
 public class RewardCardInfo
 {
     public string CardId { get; set; } = "";
+    public string EnglishId { get; set; } = "";
     public string Name { get; set; } = "";
     public int Cost { get; set; }
     public string Rarity { get; set; } = "Unknown";
@@ -23,7 +24,11 @@ public class RewardCardInfo
     public float? PickRate { get; set; }
     public float? WinRateDelta { get; set; }
     public float? SkadaScore { get; set; }
+    public float? HoldStrength { get; set; }
     public int? Rank { get; set; }
-    public string? Confidence { get; set; }
     public string? DisplayNameZh { get; set; }
+
+    // 卡牌在屏幕上的位置（用于悬停检测）
+    public float? ScreenX { get; set; }
+    public float? ScreenY { get; set; }
 }

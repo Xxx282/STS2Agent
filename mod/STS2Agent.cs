@@ -9,6 +9,7 @@ using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Nodes;
 using STS2Agent.Models;
 using STS2Agent.Services;
+using STS2Agent.UI;
 
 namespace STS2Agent;
 
@@ -23,6 +24,8 @@ public static class STS2Agent
     private static GameStateService? _gameStateService;
     private static CardRewardService? _cardRewardService;
     private static CardStatsService? _cardStatsService;
+    private static CardHoverService? _cardHoverService;
+    private static CardTooltipNode? _cardTooltip;
     private static bool _initialized;
     private static int _updateTickCounter;
 
@@ -40,6 +43,12 @@ public static class STS2Agent
 
     public static void Initialize()
     {
+        if (_initialized)
+        {
+            Logger.Warn("[STS2Agent] Initialize() 已被调用，跳过重复初始化");
+            return;
+        }
+
         Logger.Info("[STS2Agent] === Initialize() 开始 ===");
 
         try
@@ -57,6 +66,25 @@ public static class STS2Agent
             _cardStatsService = new CardStatsService();
             Logger.Info($"Initialize: CardStatsService 创建成功, IsLoaded={_cardStatsService.IsLoaded}");
 
+            // 创建悬停检测服务和悬浮提示框
+            Logger.Info("Initialize: 正在创建 CardHoverService...");
+            _cardHoverService = new CardHoverService();
+            Logger.Info("Initialize: 正在创建 CardTooltipNode...");
+            _cardTooltip = new CardTooltipNode();
+
+            // 将 CardStatsService 注入 CardRewardService，使其在提取数据时自动注入 stats
+            if (_cardStatsService != null)
+            {
+                _cardRewardService!.SetCardStatsService(_cardStatsService!);
+            }
+
+            if (_cardRewardService != null)
+            {
+                _cardRewardService.OnCardRewardAppeared += OnCardRewardAppeared;
+                _cardRewardService.OnCardRewardChanged += OnCardRewardChanged;
+                Logger.Info("Initialize: 卡牌奖励事件订阅完成");
+            }
+
             _initialized = true;
 
             // 将 GameLoopNode 加入场景树，使其 _Process 每帧被调用
@@ -68,7 +96,9 @@ public static class STS2Agent
             {
                 Logger.Info("Initialize: NGame.Instance 可用，使用 CallDeferred 添加节点");
                 NGame.Instance.CallDeferred("add_child", loopNode);
-                Logger.Info("Initialize: GameLoopNode 已入队等待加入场景树");
+                NGame.Instance.CallDeferred("add_child", _cardTooltip);
+                NGame.Instance.CallDeferred("add_child", _cardHoverService);
+                Logger.Info("Initialize: GameLoopNode、CardTooltipNode、CardHoverService 已入队等待加入场景树");
             }
             else
             {
@@ -77,24 +107,72 @@ public static class STS2Agent
                 StartFallbackPollingThread();
             }
 
-            const int port = 8888;
+            // 初始化悬停服务并订阅事件
+            if (_cardHoverService != null)
+            {
+                _cardHoverService.Initialize(_cardRewardService!);
+                _cardHoverService.OnCardHovered += OnCardHovered;
+                _cardHoverService.OnCardUnhovered += OnCardUnhovered;
+                Logger.Info("Initialize: 悬停服务事件订阅完成");
+            }
+
+            const int port = 8890;
+            int boundPort = port;
+            Logger.Info($"Initialize: 准备绑定端口 {port}，当前进程ID={System.Diagnostics.Process.GetCurrentProcess().Id}");
+
+            // 尝试注册 URL 保留权限（需要管理员权限，非管理员会静默跳过）
+            TryRegisterUrlAcl(port);
+            TryRegisterUrlAcl(8891);
+            TryRegisterUrlAcl(8892);
+
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                int tryPort = attempt == 0 ? port : (attempt == 1 ? 8891 : 8892);
+                Logger.Info($"Initialize: 尝试绑定端口 {tryPort}...");
+                try
+                {
+                    _listener = new HttpListener();
+                    _listener.Prefixes.Add($"http://localhost:{tryPort}/");
+                    _listener.Start();
+                    boundPort = tryPort;
+                    Logger.Info($"Initialize: 端口 {boundPort} 绑定成功!");
+                    break;
+                }
+                catch (HttpListenerException ex)
+                {
+                    Logger.Warn($"Initialize: 端口 {tryPort} 绑定失败 (code={ex.ErrorCode}): {ex.Message}");
+                    if (ex.ErrorCode == 5 || ex.ErrorCode == 32 || ex.ErrorCode == 183)
+                    {
+                        // 权限不足或进程占用，尝试 netsh 注册
+                        if (TryRegisterUrlAcl(tryPort))
+                        {
+                            try
+                            {
+                                _listener = new HttpListener();
+                                _listener.Prefixes.Add($"http://localhost:{tryPort}/");
+                                _listener.Start();
+                                boundPort = tryPort;
+                                Logger.Info($"Initialize: urlacl 注册后端口 {boundPort} 绑定成功!");
+                                break;
+                            }
+                            catch (HttpListenerException ex2)
+                            {
+                                Logger.Warn($"Initialize: urlacl 注册后仍然绑定失败 (code={ex2.ErrorCode}): {ex2.Message}");
+                            }
+                        }
+                    }
+                    if (_listener != null) { try { _listener.Close(); } catch { } _listener = null; }
+                    if (attempt == 2) Logger.Error($"Initialize: 所有端口绑定均失败，HTTP 服务不可用", ex);
+                }
+            }
+
             try
             {
-                _listener = new HttpListener();
-                _listener.Prefixes.Add($"http://localhost:{port}/");
-                _listener.Start();
-                Logger.Info($"Initialize: 端口 {port} 绑定成功!");
-
                 var debugDir = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "STS2Agent");
                 System.IO.Directory.CreateDirectory(debugDir);
                 var portFile = System.IO.Path.Combine(debugDir, "port.txt");
-                System.IO.File.WriteAllText(portFile, port.ToString());
-            }
-            catch (HttpListenerException ex)
-            {
-                Logger.Error($"Initialize: 端口绑定失败", ex);
-                return;
-            }
+                System.IO.File.WriteAllText(portFile, boundPort.ToString());
+            } catch { }
 
             _serverThread = new Thread(ServerLoop)
             {
@@ -102,7 +180,7 @@ public static class STS2Agent
                 Name = "STS2Agent_Server"
             };
             _serverThread.Start();
-            Logger.Info($"Initialize: HTTP服务器已启动 - http://localhost:{port}/");
+            Logger.Info($"Initialize: HTTP服务器已启动 - http://localhost:{boundPort}/");
         }
         catch (Exception ex)
         {
@@ -255,7 +333,6 @@ public static class STS2Agent
                         {
                             status = "healthy",
                             timestamp = DateTime.UtcNow,
-                            version = Version,
                             inGame = state?.InGame ?? false,
                             inCombat = state?.InCombat ?? false
                         };
@@ -377,7 +454,7 @@ public static class STS2Agent
                     canSkip = reward.CanSkip,
                     cards = reward.Cards.Select(c =>
                     {
-                        var s = _cardStatsService?.GetStats(character, c.CardId);
+                        var s = _cardStatsService?.GetStats(character, c.CardId, c.EnglishId);
                         return new
                         {
                             name = c.Name,
@@ -453,6 +530,110 @@ public static class STS2Agent
         catch
         {
             return "IRONCLAD";
+        }
+    }
+
+    private static void OnCardRewardAppeared(CardRewardInfo reward)
+    {
+        try
+        {
+            Logger.Info($"[CardReward] OnCardRewardAppeared 收到，Cards={reward.Cards.Count}");
+            var character = DetectCurrentCharacter();
+            _cardRewardService?.SetCharacter(character);
+            Logger.Info($"[CardReward] 当前角色={character}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("[CardReward] OnCardRewardAppeared 异常", ex);
+        }
+    }
+
+    private static void OnCardRewardChanged(CardRewardInfo reward)
+    {
+        try
+        {
+            if (!reward.IsVisible || reward.Cards.Count == 0)
+                return;
+            var character = DetectCurrentCharacter();
+            _cardRewardService?.SetCharacter(character);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("[CardReward] OnCardRewardChanged 异常", ex);
+        }
+    }
+
+    private static void OnCardHovered(RewardCardInfo card)
+    {
+        try
+        {
+            if (card.ScreenX.HasValue && card.ScreenY.HasValue)
+            {
+                _cardTooltip?.ShowAt(card, card.ScreenX.Value, card.ScreenY.Value);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("[Hover] OnCardHovered 异常", ex);
+        }
+    }
+
+    private static void OnCardUnhovered()
+    {
+        try
+        {
+            _cardTooltip?.Hide();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("[Hover] OnCardUnhovered 异常", ex);
+        }
+    }
+
+    private static bool TryRegisterUrlAcl(int port)
+    {
+        var url = $"http://localhost:{port}/";
+        try
+        {
+            // 先检查是否已有保留权限
+            var checkPsi = new System.Diagnostics.ProcessStartInfo("netsh", $"http show urlacl url={url}");
+            checkPsi.UseShellExecute = false;
+            checkPsi.RedirectStandardOutput = true;
+            checkPsi.CreateNoWindow = true;
+            var checkProc = System.Diagnostics.Process.Start(checkPsi);
+            var checkOutput = checkProc!.StandardOutput.ReadToEnd();
+            checkProc.WaitForExit();
+            if (checkOutput.Contains("ERROR:") || checkProc.ExitCode != 0)
+            {
+                // 无保留权限，尝试添加
+                var addPsi = new System.Diagnostics.ProcessStartInfo("netsh", $"http add urlacl url={url} user=\"Everyone\"");
+                addPsi.UseShellExecute = false;
+                addPsi.RedirectStandardOutput = true;
+                addPsi.CreateNoWindow = true;
+                var addProc = System.Diagnostics.Process.Start(addPsi);
+                var addOutput = addProc!.StandardOutput.ReadToEnd();
+                addProc.WaitForExit();
+                if (addProc.ExitCode == 0)
+                {
+                    Logger.Info($"Initialize: urlacl 注册成功 (Everyone) -> {url}");
+                    return true;
+                }
+                else
+                {
+                    Logger.Warn($"Initialize: urlacl 注册失败: {addOutput.Trim()}");
+                    return false;
+                }
+            }
+            else
+            {
+                Logger.Info($"Initialize: urlacl 已存在 -> {url}");
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Info($"Initialize: urlacl 操作异常: {ex.Message}");
+            return false;
         }
     }
 }

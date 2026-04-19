@@ -22,4 +22,5 @@
 | [enum.md](./model/enum.md) | 关键枚举速查（含 Godot 枚举反射提取方法） |
 | [flow.md](./model/flow.md) | 数据流向总览（战斗流程、奖励流程、跑团流程） |
 | [multiplayer.md](./model/multiplayer.md) | 多人游戏系统（网络同步、动作队列、玩家选择、连接管理） |
+| [settings.md](./model/settings.md) | 游戏设置系统（SettingsSave、ModSettings、设置界面节点） |
 | [tech.md](./tech.md) | 技术架构（引擎、项目结构、依赖库、Mod 系统、调试工具） |

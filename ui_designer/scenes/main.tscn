@@ -1,0 +1,44 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" uid="uid://d7e8f9a0b1c2d" path="res://scenes/CardTooltip.tscn" id="2_tooltip"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ColorRect" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.1, 0.08, 0.15, 1)
+
+[node name="Instructions" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 20.0
+offset_right = 300.0
+offset_bottom = 80.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.8, 1)
+theme_override_font_sizes/font_size = 14
+text = "左下角: CardTooltip 悬浮提示
+在 Godot 编辑器中直接拖动控件调整布局
+修改后重新运行即可预览"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="CardTooltip" parent="." instance=ExtResource("2_tooltip")]
+offset_left = 100.0
+offset_top = 500.0
+offset_right = 360.0
+offset_bottom = 660.0

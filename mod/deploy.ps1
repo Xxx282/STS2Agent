@@ -5,10 +5,12 @@
 #   .\deploy.ps1                       # Deploy to default game path
 #   .\deploy.ps1 -GamePath "D:\..."    # Specify custom game path
 #   .\deploy.ps1 -SkipBuild            # Skip build, only deploy
+#   .\deploy.ps1 -SkipBuild -Force     # Force redeploy even if game is running
 
 param(
     [string]$GamePath = "D:\steam\steamapps\common\Slay the Spire 2",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,12 +18,14 @@ $ErrorActionPreference = "Stop"
 # Project root
 $ProjectRoot = $PSScriptRoot
 $ModName = "STS2Agent"
+$ApiPort = 8890
 
 # Source files
 $SourceDll = "$ProjectRoot\.godot\mono\temp\bin\Release\$ModName.dll"
 $SourcePdb = "$ProjectRoot\.godot\mono\temp\bin\Release\$ModName.pdb"
 $SourceManifest = "$ProjectRoot\$ModName.json"
 $SourcePck = "$ProjectRoot\libs\template.pck"
+$SourceTscnDir = "$ProjectRoot\UI"
 
 # Target directory (game mods folder)
 $TargetModDir = "$GamePath\mods\$ModName"
@@ -55,8 +59,22 @@ if (-not (Test-Path $SourceDll)) {
 
 # Create target mods directory (clean if exists)
 if (Test-Path $TargetModDir) {
-    Write-Host "[Clean] Removing existing mod folder..." -ForegroundColor Yellow
-    Remove-Item $TargetModDir -Recurse -Force
+    $dllPath = "$TargetModDir\$ModName.dll"
+    $dllLocked = $false
+    if (Test-Path $dllPath) {
+        try {
+            [System.IO.File]::Delete($dllPath)
+        } catch {
+            $dllLocked = $true
+        }
+    }
+
+    if ($dllLocked -or $Force) {
+        Write-Host "[Clean] Game may be running, removing files individually..." -ForegroundColor Yellow
+        Get-ChildItem $TargetModDir -Force | Remove-Item -Force -ErrorAction SilentlyContinue
+    } else {
+        Remove-Item $TargetModDir -Recurse -Force -ErrorAction Stop
+    }
 }
 New-Item -ItemType Directory -Path $TargetModDir -Force | Out-Null
 Write-Host "[Deploy] Copying files to $TargetModDir..." -ForegroundColor Yellow
@@ -87,6 +105,15 @@ if (Test-Path $SourcePck) {
     Write-Host "  [~] template.pck not found, skipping PCK file" -ForegroundColor DarkGray
 }
 
+# Copy UI scene files (.tscn) for tscn-based UI loading
+if (Test-Path $SourceTscnDir) {
+    $tscnFiles = Get-ChildItem $SourceTscnDir -Filter "*.tscn" -ErrorAction SilentlyContinue
+    foreach ($tscn in $tscnFiles) {
+        Copy-Item $tscn.FullName -Destination $TargetModDir -Force
+        Write-Host "  [+] $($tscn.Name)" -ForegroundColor DarkGray
+    }
+}
+
 # Stats
 $DllSize = (Get-Item $SourceDll).Length / 1KB
 
@@ -96,4 +123,4 @@ Write-Host "Files deployed to: $TargetModDir" -ForegroundColor Green
 Write-Host "DLL Size: $([math]::Round($DllSize, 1)) KB"
 Write-Host ""
 Write-Host "Restart game to load the updated MOD" -ForegroundColor Yellow
-Write-Host "API: http://localhost:8888" -ForegroundColor Yellow
+Write-Host "API: http://localhost:$ApiPort" -ForegroundColor Yellow

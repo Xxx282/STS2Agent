@@ -256,7 +256,7 @@ public class CardStatsService
         }
     }
 
-    public CardStats? GetStats(string character, string cardId)
+    public CardStats? GetStats(string character, string cardId, string? englishId = null)
     {
         if (!_loaded)
         {
@@ -264,24 +264,36 @@ public class CardStatsService
             return null;
         }
 
-        // 1. 先尝试直接用 cardId 匹配
-        var key = $"{character}:{cardId}";
-        if (_statsMap.TryGetValue(key, out var stats))
+        // 1. 优先用英文 ID 匹配（推荐）
+        if (!string.IsNullOrEmpty(englishId))
         {
-            return stats;
+            var key1 = $"{character}:{englishId}";
+            if (_statsMap.TryGetValue(key1, out var stats1))
+            {
+                return stats1;
+            }
         }
 
-        // 2. 尝试用中文名匹配（游戏返回中文卡牌名）
-        var zhKey = $"{character}:{cardId}";
-        if (_zhNameMap.TryGetValue(zhKey, out stats))
+        // 2. 尝试用 cardId 当作英文 ID 直接匹配
+        if (!string.IsNullOrEmpty(cardId))
         {
-            return stats;
+            var key2 = $"{character}:{cardId}";
+            if (_statsMap.TryGetValue(key2, out var stats2))
+            {
+                return stats2;
+            }
+            // 3. 尝试用中文名在 _zhNameMap 中匹配
+            var zhKey = $"{character}:{cardId}";
+            if (_zhNameMap.TryGetValue(zhKey, out var stats3))
+            {
+                return stats3;
+            }
         }
 
         // 查询未命中（正常现象，新卡牌）
         if (_statsMap.Count > 0)
         {
-            Log($"查询未命中: {key}");
+            Log($"查询未命中: {character}:{cardId} (englishId={englishId})");
         }
         return null;
     }

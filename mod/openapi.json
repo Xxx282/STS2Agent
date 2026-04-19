@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8888",
+      "url": "http://localhost:8890",
       "description": "游戏内服务器"
     }
   ],
@@ -136,10 +136,6 @@
           "timestamp": {
             "type": "string",
             "format": "date-time"
-          },
-          "version": {
-            "type": "string",
-            "example": "1.0.0"
           },
           "inGame": {
             "type": "boolean"
